@@ -125,6 +125,12 @@ longlong wsrep_thd_trx_seqno(THD *)
 struct wsrep_ws_handle* wsrep_thd_ws_handle(THD *)
 { return 0; }
 
+void wsrep_set_multi_commit(THD *thd, bool split)
+{ }
+
+bool wsrep_get_load_multi_commit(THD *thd)
+{ return false; }
+
 int wsrep_trx_is_aborting(THD *)
 { return 0; }
 
