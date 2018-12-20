@@ -12845,6 +12845,14 @@ Rows_log_event::write_row(rpl_group_info *rgi,
     if (table->file->ha_table_flags() & HA_DUPLICATE_POS)
     {
       DBUG_PRINT("info",("Locating offending record using rnd_pos()"));
+      error= table->file->ha_rnd_init(0);
+      if (error)
+      {
+        DBUG_PRINT("info",("rnd_init() returns error %d",error));
+        table->file->print_error(error, MYF(0));
+        DBUG_RETURN(error);
+      }
+
       error= table->file->ha_rnd_pos(table->record[1], table->file->dup_ref);
       if (error)
       {
@@ -12854,6 +12862,7 @@ Rows_log_event::write_row(rpl_group_info *rgi,
         table->file->print_error(error, MYF(0));
         DBUG_RETURN(error);
       }
+      table->file->ha_rnd_end();
     }
     else
     {
