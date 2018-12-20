@@ -677,3 +677,13 @@ bool wsrep_thd_has_explicit_locks(THD *thd)
   assert(thd);
   return thd->mdl_context.has_explicit_locks();
 }
+
+void wsrep_set_load_multi_commit(THD *thd, bool split)
+{
+   thd->wsrep_split_flag= split;
+}
+
+bool wsrep_is_load_multi_commit(THD *thd)
+{
+   return thd->wsrep_split_flag;
+}
