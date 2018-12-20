@@ -35,8 +35,8 @@ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
-this program; if not, write to the Free Software Foundation, Inc., 59 Temple
-Place, Suite 330, Boston, MA 02111-1307 USA
+this program; if not, write to the Free Software Foundation, Inc.,
+51 Franklin St, Fifth Floor, Boston, MA 02111-1301 USA
 
 *******************************************************/
 
@@ -1399,7 +1399,9 @@ static lsn_t get_current_lsn(MYSQL *connection)
 					    "SHOW ENGINE INNODB STATUS",
 					    true, false)) {
 		if (MYSQL_ROW row = mysql_fetch_row(res)) {
-			if (const char *p = strstr(row[2], lsn_prefix)) {
+			const char *p= strstr(row[2], lsn_prefix);
+			DBUG_ASSERT(p);
+			if (p) {
 				p += sizeof lsn_prefix - 1;
 				lsn = lsn_t(strtoll(p, NULL, 10));
 			}
@@ -1487,7 +1489,7 @@ bool backup_start()
 		write_binlog_info(mysql_connection);
 	}
 
-	if (have_flush_engine_logs) {
+	if (have_flush_engine_logs && !opt_no_lock) {
 		msg_ts("Executing FLUSH NO_WRITE_TO_BINLOG ENGINE LOGS...\n");
 		xb_mysql_query(mysql_connection,
 			"FLUSH NO_WRITE_TO_BINLOG ENGINE LOGS", false);

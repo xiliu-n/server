@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, MariaDB Corporation.
+Copyright (c) 2017, 2018, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -27,14 +27,11 @@ Created 1/8/1996 Heikki Tuuri
 #ifndef dict0crea_h
 #define dict0crea_h
 
-#include "univ.i"
-#include "dict0types.h"
 #include "dict0dict.h"
 #include "que0types.h"
 #include "row0types.h"
 #include "mtr0mtr.h"
 #include "fil0crypt.h"
-#include "fsp0space.h"
 
 /*********************************************************************//**
 Creates a table create graph.
@@ -141,6 +138,14 @@ dict_create_index_tree_in_mem(
 /*==========================*/
 	dict_index_t*	index,		/*!< in/out: index */
 	const trx_t*	trx);		/*!< in: InnoDB transaction handle */
+
+/*******************************************************************//**
+Truncates the index tree but don't update SYSTEM TABLES.
+@return DB_SUCCESS or error */
+dberr_t
+dict_truncate_index_tree_in_mem(
+/*============================*/
+	dict_index_t*	index);		/*!< in/out: index */
 
 /*******************************************************************//**
 Drops the index tree but don't update SYS_INDEXES table. */

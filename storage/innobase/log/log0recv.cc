@@ -25,7 +25,7 @@ Recovery
 Created 9/20/1997 Heikki Tuuri
 *******************************************************/
 
-#include "ha_prototypes.h"
+#include "univ.i"
 
 #include <vector>
 #include <map>
@@ -52,8 +52,6 @@ Created 9/20/1997 Heikki Tuuri
 #include "trx0undo.h"
 #include "trx0rec.h"
 #include "fil0fil.h"
-#include "fsp0sysspace.h"
-#include "ut0new.h"
 #include "row0trunc.h"
 #include "buf0rea.h"
 #include "srv0srv.h"
@@ -234,9 +232,8 @@ static void recv_addr_trim(ulint space_id, unsigned pages, lsn_t lsn)
 		hash_cell_t* const cell = hash_get_nth_cell(
 			recv_sys->addr_hash, i);
 		for (recv_addr_t* addr = static_cast<recv_addr_t*>(cell->node),
-			     *prev = NULL, *next;
-		     addr;
-		     prev = addr, addr = next) {
+			     *next;
+		     addr; addr = next) {
 			next = static_cast<recv_addr_t*>(addr->addr_hash);
 
 			if (addr->space != space_id || addr->page_no < pages) {
@@ -257,22 +254,6 @@ static void recv_addr_trim(ulint space_id, unsigned pages, lsn_t lsn)
 					UT_LIST_REMOVE(addr->rec_list, recv);
 				}
 				recv = n;
-			}
-
-			if (UT_LIST_GET_LEN(addr->rec_list)) {
-				DBUG_PRINT("ib_log",
-					   ("preserving " ULINTPF
-					    " records for page %u:%u",
-					    UT_LIST_GET_LEN(addr->rec_list),
-					    addr->space, addr->page_no));
-			} else {
-				ut_ad(recv_sys->n_addrs);
-				--recv_sys->n_addrs;
-				if (addr == cell->node) {
-					cell->node = next;
-				} else {
-					prev->addr_hash = next;
-				}
 			}
 		}
 	}
@@ -1165,10 +1146,10 @@ recv_find_max_checkpoint(ulint* max_field)
 	switch (group->format) {
 	case 0:
 		return(recv_find_max_checkpoint_0(&group, max_field));
-	case LOG_HEADER_FORMAT_CURRENT:
-	case LOG_HEADER_FORMAT_CURRENT | LOG_HEADER_FORMAT_ENCRYPTED:
 	case LOG_HEADER_FORMAT_10_2:
 	case LOG_HEADER_FORMAT_10_2 | LOG_HEADER_FORMAT_ENCRYPTED:
+	case LOG_HEADER_FORMAT_10_3:
+	case LOG_HEADER_FORMAT_10_3 | LOG_HEADER_FORMAT_ENCRYPTED:
 	case LOG_HEADER_FORMAT_10_4:
 		/* We can only parse the unencrypted LOG_HEADER_FORMAT_10_4.
 		The encrypted format uses a larger redo log block trailer. */
@@ -1246,8 +1227,8 @@ recv_find_max_checkpoint(ulint* max_field)
 	}
 
 	switch (group->format) {
-	case LOG_HEADER_FORMAT_CURRENT:
-	case LOG_HEADER_FORMAT_CURRENT | LOG_HEADER_FORMAT_ENCRYPTED:
+	case LOG_HEADER_FORMAT_10_3:
+	case LOG_HEADER_FORMAT_10_3 | LOG_HEADER_FORMAT_ENCRYPTED:
 		if (group->subformat == 1) {
 			/* 10.2 with new crash-safe TRUNCATE */
 			break;
@@ -2128,10 +2109,7 @@ recv_recover_page(bool just_read_in, buf_block_t* block)
 page number.
 @param[in]	page_id	page id
 @return number of pages found */
-static
-ulint
-recv_read_in_area(
-	const page_id_t&	page_id)
+static ulint recv_read_in_area(const page_id_t page_id)
 {
 	recv_addr_t* recv_addr;
 	ulint	page_nos[RECV_READ_AHEAD_AREA];
@@ -2174,8 +2152,7 @@ recv_read_in_area(
 /** Apply the hash table of stored log records to persistent data pages.
 @param[in]	last_batch	whether the change buffer merge will be
 				performed as part of the operation */
-void
-recv_apply_hashed_log_recs(bool last_batch)
+void recv_apply_hashed_log_recs(bool last_batch)
 {
 	ut_ad(srv_operation == SRV_OPERATION_NORMAL
 	      || srv_operation == SRV_OPERATION_RESTORE
@@ -2238,7 +2215,8 @@ recv_apply_hashed_log_recs(bool last_batch)
 				continue;
 			}
 
-			if (recv_addr->state == RECV_DISCARDED) {
+			if (recv_addr->state == RECV_DISCARDED
+			    || !UT_LIST_GET_LEN(recv_addr->rec_list)) {
 				ut_a(recv_sys->n_addrs);
 				recv_sys->n_addrs--;
 				continue;
@@ -3431,8 +3409,8 @@ skip_apply:
 	case LOG_HEADER_FORMAT_10_2:
 	case LOG_HEADER_FORMAT_10_2 | LOG_HEADER_FORMAT_ENCRYPTED:
 		break;
-	case LOG_HEADER_FORMAT_CURRENT:
-	case LOG_HEADER_FORMAT_CURRENT | LOG_HEADER_FORMAT_ENCRYPTED:
+	case LOG_HEADER_FORMAT_10_3:
+	case LOG_HEADER_FORMAT_10_3 | LOG_HEADER_FORMAT_ENCRYPTED:
 		if (log_sys->log.subformat == 1) {
 			/* 10.2 with new crash-safe TRUNCATE */
 			break;
@@ -3582,6 +3560,8 @@ skip_apply:
 		then there is a possiblity that hash table will not contain
 		all space ids redo logs. Rescan the remaining unstored
 		redo logs for the validation of missing tablespace. */
+		ut_ad(rescan || !missing_tablespace);
+
 		while (missing_tablespace) {
 			DBUG_PRINT("ib_log", ("Rescan of redo log to validate "
 					      "the missing tablespace. Scan "
@@ -3606,6 +3586,8 @@ skip_apply:
 				log_mutex_exit();
 				return err;
 			}
+
+			rescan = true;
 		}
 
 		if (srv_operation == SRV_OPERATION_NORMAL) {
@@ -3765,6 +3747,7 @@ recv_recovery_rollback_active(void)
 		/* Drop partially created indexes. */
 		row_merge_drop_temp_indexes();
 		/* Drop garbage tables. */
+		if (srv_safe_truncate)
 		row_mysql_drop_garbage_tables();
 
 		/* Drop any auxiliary tables that were not dropped when the

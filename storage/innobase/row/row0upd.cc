@@ -24,8 +24,6 @@ Update of a row
 Created 12/27/1996 Heikki Tuuri
 *******************************************************/
 
-#include "ha_prototypes.h"
-
 #include "row0upd.h"
 #include "dict0dict.h"
 #include "dict0mem.h"
@@ -284,6 +282,34 @@ row_upd_check_references_constraints(
 				ref_table = dict_table_open_on_name(
 					foreign->foreign_table_name_lookup,
 					FALSE, FALSE, DICT_ERR_IGNORE_NONE);
+			}
+
+			/* dict_operation_lock is held both here
+			(UPDATE or DELETE with FOREIGN KEY) and by TRUNCATE
+			TABLE operations.
+			If a TRUNCATE TABLE operation is in progress,
+			there can be 2 possible conditions:
+			1) row_truncate_table_for_mysql() is not yet called.
+			2) Truncate releases dict_operation_lock
+			during eviction of pages from buffer pool
+			for a file-per-table tablespace.
+
+			In case of (1), truncate will wait for FK operation
+			to complete.
+			In case of (2), truncate will be rolled forward even
+			if it is interrupted. So if the foreign table is
+			undergoing a truncate, ignore the FK check. */
+
+			if (foreign_table) {
+				mutex_enter(&fil_system->mutex);
+				const fil_space_t* space = fil_space_get_by_id(
+					foreign_table->space);
+				const bool being_truncated = space
+					&& space->is_being_truncated;
+				mutex_exit(&fil_system->mutex);
+				if (being_truncated) {
+					continue;
+				}
 			}
 
 			/* NOTE that if the thread ends up waiting for a lock
@@ -2129,6 +2155,7 @@ row_upd_store_v_row(
 				}
 
 				dfield_copy_data(dfield, upd_field->old_v_val);
+				dfield_dup(dfield, node->heap);
 				break;
 			}
 
@@ -2149,6 +2176,7 @@ row_upd_store_v_row(
 								update->old_vrow,
 								col_no);
 						dfield_copy_data(dfield, vfield);
+						dfield_dup(dfield, node->heap);
 					}
 				} else {
 					/* Need to compute, this happens when

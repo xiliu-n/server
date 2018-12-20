@@ -38,7 +38,6 @@ Created 3/26/1996 Heikki Tuuri
 #include "trx0purge.h"
 #include "trx0rseg.h"
 #include "row0row.h"
-#include "fsp0sysspace.h"
 #include "row0mysql.h"
 
 /*=========== UNDO LOG RECORD CREATION AND DECODING ====================*/
@@ -1932,12 +1931,12 @@ trx_undo_page_report_rename(trx_t* trx, const dict_table_t* table,
 @param[in,out]	trx	transaction
 @param[in]	table	table that is being renamed
 @return	DB_SUCCESS or error code */
-dberr_t
-trx_undo_report_rename(trx_t* trx, const dict_table_t* table)
+dberr_t trx_undo_report_rename(trx_t* trx, const dict_table_t* table)
 {
 	ut_ad(!trx->read_only);
 	ut_ad(trx->id);
 	ut_ad(!table->is_temporary());
+	ut_ad(srv_safe_truncate);
 
 	trx_rseg_t*	rseg	= trx->rsegs.m_redo.rseg;
 	trx_undo_t**	pundo	= &trx->rsegs.m_redo.insert_undo;
@@ -1948,7 +1947,7 @@ trx_undo_report_rename(trx_t* trx, const dict_table_t* table)
 	ut_ad((err == DB_SUCCESS) == (*pundo != NULL));
 	if (trx_undo_t* undo = *pundo) {
 		mtr_t	mtr;
-		mtr.start(trx);
+		mtr.start();
 
 		buf_block_t* block = buf_page_get_gen(
 			page_id_t(undo->space, undo->last_page_no),
@@ -1977,7 +1976,7 @@ trx_undo_report_rename(trx_t* trx, const dict_table_t* table)
 				break;
 			} else {
 				mtr.commit();
-				mtr.start(trx);
+				mtr.start();
 				block = trx_undo_add_page(trx, undo, &mtr);
 				if (!block) {
 					err = DB_OUT_OF_FILE_SPACE;

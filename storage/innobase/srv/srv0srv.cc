@@ -46,14 +46,11 @@ Created 10/8/1995 Heikki Tuuri
 // #include "mysql/psi/mysql_stage.h"
 // #include "mysql/psi/psi.h"
 
-#include "ha_prototypes.h"
-
 #include "btr0sea.h"
 #include "buf0flu.h"
 #include "buf0lru.h"
 #include "dict0boot.h"
 #include "dict0load.h"
-#include "fsp0sysspace.h"
 #include "ibuf0ibuf.h"
 #include "lock0lock.h"
 #include "log0recv.h"
@@ -152,6 +149,9 @@ my_bool	srv_read_only_mode;
 /** store to its own file each table created by an user; data
 dictionary tables are in the system tablespace 0 */
 my_bool	srv_file_per_table;
+/** whether to use backup-safe TRUNCATE and crash-safe RENAME
+instead of the MySQL 5.7 WL#6501 TRUNCATE TABLE implementation */
+my_bool	srv_safe_truncate;
 /** The file format to use on new *.ibd files. */
 ulint	srv_file_format;
 /** Whether to check file format during startup.  A value of
@@ -1626,7 +1626,7 @@ srv_export_innodb_status(void)
 	export_vars.innodb_system_rows_deleted =
 		srv_stats.n_system_rows_deleted;
 
-	export_vars.innodb_num_open_files = fil_n_file_opened;
+	export_vars.innodb_num_open_files = fil_system->n_open;
 
 	export_vars.innodb_truncated_status_writes =
 		srv_truncated_status_writes;

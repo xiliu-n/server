@@ -24,8 +24,6 @@ Database object creation
 Created 1/8/1996 Heikki Tuuri
 *******************************************************/
 
-#include "ha_prototypes.h"
-
 #include "dict0crea.h"
 #include "btr0pcur.h"
 #include "btr0btr.h"
@@ -42,8 +40,6 @@ Created 1/8/1996 Heikki Tuuri
 #include "ut0vec.h"
 #include "dict0priv.h"
 #include "fts0priv.h"
-#include "fsp0space.h"
-#include "fsp0sysspace.h"
 #include "srv0start.h"
 
 /*****************************************************************//**
@@ -431,9 +427,7 @@ dict_build_table_def_step(
 
 		dberr_t err = fil_ibd_create(
 			space, table->name.m_name, filepath, fsp_flags,
-			FIL_IBD_FILE_INITIAL_SIZE,
-			node ? node->mode : FIL_ENCRYPTION_DEFAULT,
-			node ? node->key_id : FIL_DEFAULT_ENCRYPTION_KEY);
+			FIL_IBD_FILE_INITIAL_SIZE, node->mode, node->key_id);
 
 		ut_free(filepath);
 
@@ -1140,6 +1134,73 @@ dict_recreate_index_tree(
 	return(FIL_NULL);
 }
 
+/*******************************************************************//**
+Truncates the index tree but don't update SYSTEM TABLES.
+@return DB_SUCCESS or error */
+dberr_t
+dict_truncate_index_tree_in_mem(
+/*============================*/
+	dict_index_t*	index)		/*!< in/out: index */
+{
+	mtr_t		mtr;
+	bool		truncate;
+	ulint		space = index->space;
+
+	ut_ad(mutex_own(&dict_sys->mutex));
+	ut_ad(dict_table_is_temporary(index->table));
+
+	ulint		type = index->type;
+	ulint		root_page_no = index->page;
+
+	if (root_page_no == FIL_NULL) {
+
+		/* The tree has been freed. */
+		ib::warn() << "Trying to TRUNCATE a missing index of table "
+			<< index->table->name << "!";
+
+		truncate = false;
+	} else {
+		truncate = true;
+	}
+
+	bool			found;
+	const page_size_t	page_size(fil_space_get_page_size(space,
+								  &found));
+
+	if (!found) {
+
+		/* It is a single table tablespace and the .ibd file is
+		missing: do nothing */
+
+		ib::warn()
+			<< "Trying to TRUNCATE a missing .ibd file of table "
+			<< index->table->name << "!";
+	}
+
+	/* If table to truncate resides in its on own tablespace that will
+	be re-created on truncate then we can ignore freeing of existing
+	tablespace objects. */
+
+	if (truncate) {
+		btr_free(page_id_t(space, root_page_no), page_size);
+	}
+
+	mtr_start(&mtr);
+	mtr_set_log_mode(&mtr, MTR_LOG_NO_REDO);
+
+	root_page_no = btr_create(
+		type, space, page_size, index->id, index, NULL, &mtr);
+
+	DBUG_EXECUTE_IF("ib_err_trunc_temp_recreate_index",
+			root_page_no = FIL_NULL;);
+
+	index->page = root_page_no;
+
+	mtr_commit(&mtr);
+
+	return(index->page == FIL_NULL ? DB_ERROR : DB_SUCCESS);
+}
+
 /*********************************************************************//**
 Creates a table create graph.
 @return own: table create node */
@@ -1585,6 +1646,21 @@ dict_create_or_check_foreign_constraint_tables(void)
 	trx->op_info = "creating foreign key sys tables";
 
 	row_mysql_lock_data_dictionary(trx);
+
+	DBUG_EXECUTE_IF(
+		"create_and_drop_garbage",
+		err = que_eval_sql(
+			NULL,
+			"PROCEDURE CREATE_GARBAGE_TABLE_PROC () IS\n"
+			"BEGIN\n"
+			"CREATE TABLE\n"
+			"\"test/#sql-ib-garbage\"(ID CHAR);\n"
+			"CREATE UNIQUE CLUSTERED INDEX PRIMARY"
+			" ON \"test/#sql-ib-garbage\"(ID);\n"
+			"END;\n", FALSE, trx);
+		ut_ad(err == DB_SUCCESS);
+		row_drop_table_for_mysql("test/#sql-ib-garbage", trx,
+					 SQLCOM_DROP_DB, true););
 
 	/* Check which incomplete table definition to drop. */
 
@@ -2191,15 +2267,6 @@ dict_create_add_foreigns_to_dictionary(
 			return(error);
 		}
 	}
-
-	trx->op_info = "committing foreign key definitions";
-
-	if (trx_is_started(trx)) {
-
-		trx_commit(trx);
-	}
-
-	trx->op_info = "";
 
 	return(DB_SUCCESS);
 }

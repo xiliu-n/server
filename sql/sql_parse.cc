@@ -596,7 +596,8 @@ void init_update_queries(void)
   sql_command_flags[SQLCOM_DELETE]=         CF_CHANGES_DATA | CF_REEXECUTION_FRAGILE |
                                             CF_CAN_GENERATE_ROW_EVENTS |
                                             CF_OPTIMIZER_TRACE |
-                                            CF_CAN_BE_EXPLAINED;
+                                            CF_CAN_BE_EXPLAINED |
+                                            CF_SP_BULK_SAFE;
   sql_command_flags[SQLCOM_DELETE_MULTI]=   CF_CHANGES_DATA | CF_REEXECUTION_FRAGILE |
                                             CF_CAN_GENERATE_ROW_EVENTS |
                                             CF_OPTIMIZER_TRACE |
@@ -2359,7 +2360,8 @@ com_multi_end:
     /* wsrep BF abort in query exec phase */
     mysql_mutex_lock(&thd->LOCK_thd_data);
     do_end_of_statement= thd->wsrep_conflict_state != REPLAYING &&
-                         thd->wsrep_conflict_state != RETRY_AUTOCOMMIT;
+                         thd->wsrep_conflict_state != RETRY_AUTOCOMMIT &&
+                         !thd->killed;
     mysql_mutex_unlock(&thd->LOCK_thd_data);
   }
   else
@@ -6238,6 +6240,7 @@ end_with_restore_list:
   goto finish;
 
 error:
+WSREP_ERROR_LABEL:
   res= TRUE;
 
 finish:

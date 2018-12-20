@@ -25,7 +25,7 @@ Contains also create table and other data dictionary operations.
 Created 9/17/2000 Heikki Tuuri
 *******************************************************/
 
-#include "ha_prototypes.h"
+#include "univ.i"
 #include <debug_sync.h>
 #include <gstream.h>
 #include <spatial.h>
@@ -37,6 +37,8 @@ Created 9/17/2000 Heikki Tuuri
 #include <sql_const.h>
 #include "dict0dict.h"
 #include "dict0load.h"
+#include "dict0priv.h"
+#include "dict0boot.h"
 #include "dict0stats.h"
 #include "dict0stats_bg.h"
 #include "dict0defrag_bg.h"
@@ -44,7 +46,6 @@ Created 9/17/2000 Heikki Tuuri
 #include "fil0fil.h"
 #include "fil0crypt.h"
 #include "fsp0file.h"
-#include "fsp0sysspace.h"
 #include "fts0fts.h"
 #include "fts0types.h"
 #include "ibuf0ibuf.h"
@@ -66,7 +67,6 @@ Created 9/17/2000 Heikki Tuuri
 #include "srv0start.h"
 #include "row0ext.h"
 #include "srv0start.h"
-#include "ut0new.h"
 
 #include <algorithm>
 #include <deque>
@@ -2354,9 +2354,8 @@ err_exit:
 }
 
 /*********************************************************************//**
-Does an index creation operation for MySQL. TODO: currently failure
-to create an index results in dropping the whole table! This is no problem
-currently as all indexes must be created at the same time as the table.
+Create an index when creating a table.
+On failure, the caller must drop the table!
 @return error number or DB_SUCCESS */
 dberr_t
 row_create_index_for_mysql(
@@ -2490,123 +2489,12 @@ row_create_index_for_mysql(
 error_handling:
 	dict_table_close(table, TRUE, FALSE);
 
-	if (err != DB_SUCCESS) {
-		/* We have special error handling here */
-
-		trx->error_state = DB_SUCCESS;
-
-		if (trx_is_started(trx)) {
-
-			trx_rollback_to_savepoint(trx, NULL);
-		}
-
-		row_drop_table_for_mysql(table_name, trx, SQLCOM_DROP_TABLE,
-					 true);
-
-		if (trx_is_started(trx)) {
-
-			trx_commit_for_mysql(trx);
-		}
-
-		trx->error_state = DB_SUCCESS;
-	}
-
 	trx->op_info = "";
 
 	ut_free(table_name);
 	ut_free(index_name);
 
 	return(err);
-}
-
-/*********************************************************************//**
-Scans a table create SQL string and adds to the data dictionary
-the foreign key constraints declared in the string. This function
-should be called after the indexes for a table have been created.
-Each foreign key constraint must be accompanied with indexes in
-bot participating tables. The indexes are allowed to contain more
-fields than mentioned in the constraint.
-
-@param[in]	trx		transaction (NULL if not adding to dictionary)
-@param[in]	sql_string	table create statement where
-				foreign keys are declared like:
-				FOREIGN KEY (a, b) REFERENCES table2(c, d),
-				table2 can be written also with the database
-				name before it: test.table2; the default
-				database id the database of parameter name
-@param[in]	sql_length	length of sql_string
-@param[in]	name		table full name in normalized form
-@param[in]	reject_fks	whether to fail with DB_CANNOT_ADD_CONSTRAINT
-				if any foreign keys are found
-@return error code or DB_SUCCESS */
-dberr_t
-row_table_add_foreign_constraints(
-	trx_t*			trx,
-	const char*		sql_string,
-	size_t			sql_length,
-	const char*		name,
-	bool			reject_fks)
-{
-	dberr_t	err;
-
-	DBUG_ENTER("row_table_add_foreign_constraints");
-
-	ut_ad(mutex_own(&dict_sys->mutex));
-	ut_ad(rw_lock_own(dict_operation_lock, RW_LOCK_X));
-	ut_a(sql_string);
-
-	if (trx) {
-		trx->op_info = "adding foreign keys";
-
-		trx_start_if_not_started_xa(trx, true);
-
-		trx_set_dict_operation(trx, TRX_DICT_OP_TABLE);
-
-		err = dict_create_foreign_constraints(
-			trx, sql_string, sql_length, name, reject_fks);
-
-		DBUG_EXECUTE_IF("ib_table_add_foreign_fail",
-				err = DB_DUPLICATE_KEY;);
-
-		DEBUG_SYNC_C("table_add_foreign_constraints");
-	} else {
-		err = DB_SUCCESS;
-	}
-
-	if (err == DB_SUCCESS) {
-		/* Check that also referencing constraints are ok */
-		dict_names_t	fk_tables;
-		err = dict_load_foreigns(name, NULL, false, true,
-					 DICT_ERR_IGNORE_NONE, fk_tables);
-
-		while (err == DB_SUCCESS && !fk_tables.empty()) {
-			dict_load_table(fk_tables.front(), true,
-					DICT_ERR_IGNORE_NONE);
-			fk_tables.pop_front();
-		}
-	}
-
-	if (err != DB_SUCCESS && trx) {
-		/* We have special error handling here */
-
-		trx->error_state = DB_SUCCESS;
-
-		if (trx_is_started(trx)) {
-
-			trx_rollback_to_savepoint(trx, NULL);
-		}
-
-		row_drop_table_for_mysql(name, trx, SQLCOM_DROP_TABLE, true);
-
-		if (trx_is_started(trx)) {
-
-			trx_commit_for_mysql(trx);
-		}
-
-		trx->error_state = DB_SUCCESS;
-	}
-
-	DBUG_RETURN(err);
 }
 
 /*********************************************************************//**
@@ -3595,7 +3483,8 @@ defer:
 			ib::info() << "Deferring DROP TABLE " << table->name
 				   << "; renaming to " << tmp_name;
 			err = row_rename_table_for_mysql(
-				table->name.m_name, tmp_name, trx, false);
+				table->name.m_name, tmp_name, trx,
+				false, false);
 		} else {
 			err = DB_SUCCESS;
 		}
@@ -3671,9 +3560,7 @@ defer:
 		rw_lock_x_unlock(dict_index_get_lock(index));
 	}
 
-	/* As we don't insert entries to SYSTEM TABLES for temp-tables
-	we need to avoid running removal of these entries. */
-	if (!dict_table_is_temporary(table)) {
+	if (!table->is_temporary()) {
 		/* We use the private SQL parser of Innobase to generate the
 		query graphs needed in deleting the dictionary data from system
 		tables in Innobase. Deleting a row from SYS_INDEXES table also
@@ -3682,132 +3569,110 @@ defer:
 
 		info = pars_info_create();
 
-		pars_info_add_str_literal(info, "table_name", name);
+		pars_info_add_str_literal(info, "name", name);
 
-		err = (sqlcom == SQLCOM_TRUNCATE) ? DB_SUCCESS : que_eval_sql(
-			info,
-			"PROCEDURE DROP_FOREIGN_PROC () IS\n"
-			"sys_foreign_id CHAR;\n"
-			"table_id CHAR;\n"
-			"foreign_id CHAR;\n"
-			"space_id INT;\n"
-			"found INT;\n"
+		if (sqlcom != SQLCOM_TRUNCATE
+		    && strchr(name, '/')
+		    && dict_table_get_low("SYS_FOREIGN")
+		    && dict_table_get_low("SYS_FOREIGN_COLS")) {
+			err = que_eval_sql(
+				info,
+				"PROCEDURE DROP_FOREIGN_PROC () IS\n"
+				"fid CHAR;\n"
 
-			"DECLARE CURSOR cur_fk IS\n"
-			"SELECT ID FROM SYS_FOREIGN\n"
-			"WHERE FOR_NAME = :table_name\n"
-			"AND TO_BINARY(FOR_NAME)\n"
-			"  = TO_BINARY(:table_name)\n"
-			"LOCK IN SHARE MODE;\n"
+				"DECLARE CURSOR fk IS\n"
+				"SELECT ID FROM SYS_FOREIGN\n"
+				"WHERE FOR_NAME = :name\n"
+				"AND TO_BINARY(FOR_NAME) = TO_BINARY(:name)\n"
+				"FOR UPDATE;\n"
 
-			"BEGIN\n"
-
-			"SELECT ID INTO table_id\n"
-			"FROM SYS_TABLES\n"
-			"WHERE NAME = :table_name\n"
-			"LOCK IN SHARE MODE;\n"
-			"IF (SQL % NOTFOUND) THEN\n"
-			"       RETURN;\n"
-			"END IF;\n"
-
-			"SELECT SPACE INTO space_id\n"
-			"FROM SYS_TABLES\n"
-			"WHERE NAME = :table_name;\n"
-			"IF (SQL % NOTFOUND) THEN\n"
-			"       RETURN;\n"
-			"END IF;\n"
-
-			"found := 1;\n"
-			"SELECT ID INTO sys_foreign_id\n"
-			"FROM SYS_TABLES\n"
-			"WHERE NAME = 'SYS_FOREIGN'\n"
-			"LOCK IN SHARE MODE;\n"
-			"IF (SQL % NOTFOUND) THEN\n"
-			"       found := 0;\n"
-			"END IF;\n"
-			"IF (:table_name = 'SYS_FOREIGN') THEN\n"
-			"       found := 0;\n"
-			"END IF;\n"
-			"IF (:table_name = 'SYS_FOREIGN_COLS') \n"
-			"THEN\n"
-			"       found := 0;\n"
-			"END IF;\n"
-
-			"OPEN cur_fk;\n"
-			"WHILE found = 1 LOOP\n"
-			"       FETCH cur_fk INTO foreign_id;\n"
-			"       IF (SQL % NOTFOUND) THEN\n"
-			"               found := 0;\n"
-			"       ELSE\n"
-			"               DELETE FROM \n"
-			"		   SYS_FOREIGN_COLS\n"
-			"               WHERE ID = foreign_id;\n"
-			"               DELETE FROM SYS_FOREIGN\n"
-			"               WHERE ID = foreign_id;\n"
-			"       END IF;\n"
-			"END LOOP;\n"
-			"CLOSE cur_fk;\n"
-
-			"END;\n",
-			FALSE, trx);
-
-		if (err == DB_SUCCESS) {
-			if (sqlcom != SQLCOM_TRUNCATE) {
+				"BEGIN\n"
+				"OPEN fk;\n"
+				"WHILE 1 = 1 LOOP\n"
+				"  FETCH fk INTO fid;\n"
+				"  IF (SQL % NOTFOUND) THEN RETURN; END IF;\n"
+				"  DELETE FROM SYS_FOREIGN_COLS WHERE ID=fid;\n"
+				"  DELETE FROM SYS_FOREIGN WHERE ID=fid;\n"
+				"END LOOP;\n"
+				"CLOSE fk;\n"
+				"END;\n", FALSE, trx);
+			if (err == DB_SUCCESS) {
 				info = pars_info_create();
-				pars_info_add_str_literal(info, "table_name",
-							  name);
+				pars_info_add_str_literal(info, "name", name);
+				goto do_drop;
+			}
+		} else {
+do_drop:
+			if (dict_table_get_low("SYS_VIRTUAL")) {
+				err = que_eval_sql(
+					info,
+					"PROCEDURE DROP_VIRTUAL_PROC () IS\n"
+					"tid CHAR;\n"
+
+					"BEGIN\n"
+					"SELECT ID INTO tid FROM SYS_TABLES\n"
+					"WHERE NAME = :name FOR UPDATE;\n"
+					"IF (SQL % NOTFOUND) THEN RETURN;"
+					" END IF;\n"
+					"DELETE FROM SYS_VIRTUAL"
+					" WHERE TABLE_ID = tid;\n"
+					"END;\n", FALSE, trx);
+				if (err == DB_SUCCESS) {
+					info = pars_info_create();
+					pars_info_add_str_literal(
+						info, "name", name);
+				}
+			} else {
+				err = DB_SUCCESS;
 			}
 
-			err = que_eval_sql(
-			info,
-			"PROCEDURE DROP_TABLE_PROC () IS\n"
-			"table_id CHAR;\n"
-			"space_id INT;\n"
-			"index_id CHAR;\n"
+			err = err == DB_SUCCESS ? que_eval_sql(
+				info,
+				"PROCEDURE DROP_TABLE_PROC () IS\n"
+				"tid CHAR;\n"
+				"iid CHAR;\n"
 
-			"DECLARE CURSOR cur_idx IS\n"
-			"SELECT ID FROM SYS_INDEXES\n"
-			"WHERE TABLE_ID = table_id\n"
-			"FOR UPDATE;\n"
+				"DECLARE CURSOR cur_idx IS\n"
+				"SELECT ID FROM SYS_INDEXES\n"
+				"WHERE TABLE_ID = tid FOR UPDATE;\n"
 
-			"BEGIN\n"
-			"SELECT ID, SPACE INTO table_id,space_id\n"
-			"FROM SYS_TABLES\n"
-			"WHERE NAME = :table_name FOR UPDATE;\n"
-			"IF (SQL % NOTFOUND) THEN\n"
-			"       RETURN;\n"
-			"END IF;\n"
+				"BEGIN\n"
+				"SELECT ID INTO tid FROM SYS_TABLES\n"
+				"WHERE NAME = :name FOR UPDATE;\n"
+				"IF (SQL % NOTFOUND) THEN RETURN; END IF;\n"
 
-			"DELETE FROM SYS_COLUMNS\n"
-			"WHERE TABLE_ID = table_id;\n"
-			"DELETE FROM SYS_TABLES\n"
-			"WHERE NAME = :table_name;\n"
+				"OPEN cur_idx;\n"
+				"WHILE 1 = 1 LOOP\n"
+				"  FETCH cur_idx INTO iid;\n"
+				"  IF (SQL % NOTFOUND) THEN EXIT; END IF;\n"
+				"  DELETE FROM SYS_FIELDS\n"
+				"  WHERE INDEX_ID = iid;\n"
+				"  DELETE FROM SYS_INDEXES\n"
+				"  WHERE ID = iid AND TABLE_ID = tid;\n"
+				"END LOOP;\n"
+				"CLOSE cur_idx;\n"
 
-			"DELETE FROM SYS_TABLESPACES\n"
-			"WHERE SPACE = space_id;\n"
-			"DELETE FROM SYS_DATAFILES\n"
-			"WHERE SPACE = space_id;\n"
+				"DELETE FROM SYS_COLUMNS WHERE TABLE_ID=tid;\n"
+				"DELETE FROM SYS_TABLES WHERE NAME=:name;\n"
 
-			"DELETE FROM SYS_VIRTUAL\n"
-			"WHERE TABLE_ID = table_id;\n"
+				"END;\n", FALSE, trx) : err;
 
-			"OPEN cur_idx;\n"
-			"WHILE 1 = 1 LOOP\n"
-			"       FETCH cur_idx INTO index_id;\n"
-			"       IF (SQL % NOTFOUND) THEN\n"
-			"		EXIT;\n"
-			"       ELSE\n"
-			"               DELETE FROM SYS_FIELDS\n"
-			"               WHERE INDEX_ID = index_id;\n"
-			"               DELETE FROM SYS_INDEXES\n"
-			"               WHERE ID = index_id\n"
-			"               AND TABLE_ID = table_id;\n"
-			"       END IF;\n"
-			"END LOOP;\n"
-			"CLOSE cur_idx;\n"
-
-			"END;\n",
-			FALSE, trx);
+			if (err == DB_SUCCESS && table->space
+			    && dict_table_get_low("SYS_TABLESPACES")
+			    && dict_table_get_low("SYS_DATAFILES")) {
+				info = pars_info_create();
+				pars_info_add_int4_literal(info, "id",
+							   lint(table->space));
+				err = que_eval_sql(
+					info,
+					"PROCEDURE DROP_SPACE_PROC () IS\n"
+					"BEGIN\n"
+					"DELETE FROM SYS_TABLESPACES\n"
+					"WHERE SPACE = :id;\n"
+					"DELETE FROM SYS_DATAFILES\n"
+					"WHERE SPACE = :id;\n"
+					"END;\n", FALSE, trx);
+			}
 		}
 	} else {
 		page_no = page_nos;
@@ -4263,7 +4128,9 @@ row_rename_table_for_mysql(
 	const char*	old_name,	/*!< in: old table name */
 	const char*	new_name,	/*!< in: new table name */
 	trx_t*		trx,		/*!< in/out: transaction */
-	bool		commit)		/*!< in: whether to commit trx */
+	bool		commit,		/*!< in: whether to commit trx */
+	bool		use_fk)		/*!< in: whether to parse and enforce
+					FOREIGN KEY constraints */
 {
 	dict_table_t*	table			= NULL;
 	ibool		dict_locked		= FALSE;
@@ -4368,7 +4235,7 @@ row_rename_table_for_mysql(
 
 		goto funct_exit;
 
-	} else if (!old_is_tmp && new_is_tmp) {
+	} else if (use_fk && !old_is_tmp && new_is_tmp) {
 		/* MySQL is doing an ALTER TABLE command and it renames the
 		original table to a temporary table name. We want to preserve
 		the original foreign key constraint definitions despite the
@@ -4403,7 +4270,7 @@ row_rename_table_for_mysql(
 		goto funct_exit;
 	}
 
-	if (!table->is_temporary()) {
+	if (!table->is_temporary() && srv_safe_truncate) {
 		err = trx_undo_report_rename(trx, table);
 
 		if (err != DB_SUCCESS) {
@@ -4577,6 +4444,9 @@ row_rename_table_for_mysql(
 			"    = TO_BINARY(:old_table_name);\n"
 			"END;\n"
 			, FALSE, trx);
+		if (err != DB_SUCCESS) {
+			goto end;
+		}
 
 	} else if (n_constraints_to_drop > 0) {
 		/* Drop some constraints of tmp tables. */

@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
 Copyright (c) 2013, 2018, MariaDB Corporation.
 
@@ -60,7 +60,6 @@ ib_warn_row_too_big(const dict_table_t*	table);
 #include "dict0mem.h"
 #include "dict0priv.h"
 #include "dict0stats.h"
-#include "fsp0sysspace.h"
 #include "fts0fts.h"
 #include "fts0types.h"
 #include "lock0lock.h"
@@ -81,7 +80,6 @@ ib_warn_row_too_big(const dict_table_t*	table);
 #include "srv0start.h"
 #include "sync0sync.h"
 #include "trx0undo.h"
-#include "ut0new.h"
 
 #include <vector>
 #include <algorithm>
@@ -3357,8 +3355,6 @@ dict_foreign_find_index(
 
 	while (index != NULL) {
 		if (types_idx != index
-		    && !(index->type & DICT_FTS)
-		    && !dict_index_is_spatial(index)
 		    && !index->to_be_dropped
 		    && !dict_index_is_online_ddl(index)
 		    && dict_foreign_qualify_index(
@@ -6879,6 +6875,10 @@ dict_foreign_qualify_index(
 {
 	if (dict_index_get_n_fields(index) < n_cols) {
 		return(false);
+	}
+
+	if (index->type & (DICT_SPATIAL | DICT_FTS)) {
+		return false;
 	}
 
 	for (ulint i = 0; i < n_cols; i++) {

@@ -2723,14 +2723,17 @@ bool create_key_parts_for_pseudo_indexes(RANGE_OPT_PARAM *param,
 {
   Field **field_ptr;
   TABLE *table= param->table;
+  partition_info *part_info= NULL;
+  #ifdef WITH_PARTITION_STORAGE_ENGINE
+    part_info= table->part_info;
+  #endif
   uint parts= 0;
 
   for (field_ptr= table->field; *field_ptr; field_ptr++)
   {
-    Column_statistics* col_stats= (*field_ptr)->read_stats;
-    if (bitmap_is_set(used_fields, (*field_ptr)->field_index)
-       && col_stats && !col_stats->no_stat_values_provided()
-       && !((*field_ptr)->type() == MYSQL_TYPE_GEOMETRY))
+    Field *field= *field_ptr;
+    if (bitmap_is_set(used_fields, field->field_index) &&
+        is_eits_usable(field))
       parts++;
   }
 
@@ -2748,10 +2751,10 @@ bool create_key_parts_for_pseudo_indexes(RANGE_OPT_PARAM *param,
   uint max_key_len= 0;
   for (field_ptr= table->field; *field_ptr; field_ptr++)
   {
-    if (bitmap_is_set(used_fields, (*field_ptr)->field_index))
+    Field *field= *field_ptr;
+    if (bitmap_is_set(used_fields, field->field_index))
     {
-      Field *field= *field_ptr;
-      if (field->type() == MYSQL_TYPE_GEOMETRY)
+      if (!is_eits_usable(field))
         continue;
 
       uint16 store_length;
@@ -3126,6 +3129,12 @@ bool calculate_cond_selectivity_for_table(THD *thd, TABLE *table, Item **cond)
     thd->mem_root= param.old_root;
     free_root(&alloc, MYF(0));
 
+  }
+
+  if (quick && (quick->get_type() == QUICK_SELECT_I::QS_TYPE_ROR_UNION || 
+     quick->get_type() == QUICK_SELECT_I::QS_TYPE_INDEX_MERGE))
+  {
+    table->cond_selectivity*= (quick->records/table_records);
   }
 
   bitmap_union(used_fields, &handled_columns);
