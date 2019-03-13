@@ -421,7 +421,7 @@ fil_space_is_flushed(
 /** Validate the compression algorithm for full crc32 format.
 @param[in]	space	tablespace object
 @return whether the compression algorithm support */
-static bool fil_comp_algo_validate(fil_space_t*	space)
+static bool fil_comp_algo_validate(const fil_space_t* space)
 {
 	if (!space->full_crc32()) {
 		return true;
@@ -430,41 +430,29 @@ static bool fil_comp_algo_validate(fil_space_t*	space)
 	DBUG_EXECUTE_IF("fil_comp_algo_validate_fail",
 			return false;);
 
-	ulint	comp_algo = fil_space_t::get_compression_algo(space->flags);
-	bool	exist = false;
+	ulint	comp_algo = space->get_compression_algo();
 	switch (comp_algo) {
 	case PAGE_UNCOMPRESSED:
 	case PAGE_ZLIB_ALGORITHM:
-		exist = true;
-		break;
-	case PAGE_LZ4_ALGORITHM:
 #ifdef HAVE_LZ4
-		exist = true;
+	case PAGE_LZ4_ALGORITHM:
 #endif /* HAVE_LZ4 */
-		break;
-	case PAGE_LZO_ALGORITHM:
 #ifdef HAVE_LZO
-		exist = true;
+	case PAGE_LZO_ALGORITHM:
 #endif /* HAVE_LZO */
-		break;
-	case PAGE_LZMA_ALGORITHM:
 #ifdef HAVE_LZMA
-		exist = true;
+	case PAGE_LZMA_ALGORITHM:
 #endif /* HAVE_LZMA */
-		break;
-	case PAGE_BZIP2_ALGORITHM:
 #ifdef HAVE_BZIP2
-		exist = true;
+	case PAGE_BZIP2_ALGORITHM:
 #endif /* HAVE_BZIP2 */
-		break;
-	case PAGE_SNAPPY_ALGORITHM:
 #ifdef HAVE_SNAPPY
-		exist = true;
+	case PAGE_SNAPPY_ALGORITHM:
 #endif /* HAVE_SNAPPY */
-		break;
+		return true;
 	}
 
-	return (exist);
+	return false;
 }
 
 /** Append a file to the chain of files of a space.

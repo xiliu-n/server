@@ -471,14 +471,15 @@ buf_pool_register_chunk(
 @param[in]	read_buf	database page
 @param[in]	page_size	page frame size
 @return whether the page is all zeroes */
-bool buf_page_is_zeroes(const byte* read_buf, size_t page_size)
+bool buf_page_is_zeroes(const void* read_buf, size_t page_size)
 {
-	for (ulint i = 0; i < page_size; i++) {
-		if (read_buf[i] != 0) {
+	const ulint* b = reinterpret_cast<const ulint*>(read_buf);
+	const ulint* const e = b + page_size / sizeof *b;
+	do {
+		if (*b++) {
 			return false;
 		}
-	}
-
+	} while (b != e);
 	return true;
 }
 
@@ -493,9 +494,8 @@ static bool buf_page_decrypt_after_read(buf_page_t* bpage, fil_space_t* space)
 
 	byte* dst_frame = bpage->zip.data ? bpage->zip.data :
 		((buf_block_t*) bpage)->frame;
-	bool page_compressed = fil_space_t::is_compressed(space->flags)
-				&& buf_page_is_compressed(dst_frame,
-							  space->flags);
+	bool page_compressed = space->is_compressed()
+		&& buf_page_is_compressed(dst_frame, space->flags);
 	buf_pool_t* buf_pool = buf_pool_from_bpage(bpage);
 
 	if (bpage->id.page_no() == 0) {
@@ -514,20 +514,20 @@ static bool buf_page_decrypt_after_read(buf_page_t* bpage, fil_space_t* space)
 		/* the page we read is unencrypted */
 		/* Find free slot from temporary memory array */
 decompress:
-		slot = buf_pool_reserve_tmp_slot(buf_pool);
-		/* For decompression, use crypt_buf. */
-		buf_tmp_reserve_crypt_buf(slot);
-decompress_with_slot:
-		ut_d(fil_page_type_validate(space, dst_frame));
-
-		if (space->full_crc32() && !key_version
+		if (space->full_crc32()
 		    && buf_page_is_corrupted(true, dst_frame, space->flags)) {
 			return false;
 		}
 
+		slot = buf_pool_reserve_tmp_slot(buf_pool);
+		/* For decompression, use crypt_buf. */
+		buf_tmp_reserve_crypt_buf(slot);
+
+decompress_with_slot:
+		ut_d(fil_page_type_validate(space, dst_frame));
+
 		bpage->write_size = fil_page_decompress(
-					slot->crypt_buf, dst_frame,
-					space->flags);
+			slot->crypt_buf, dst_frame, space->flags);
 		slot->release();
 
 		ut_ad(!bpage->write_size
@@ -909,22 +909,6 @@ buf_page_is_checksum_valid_none(
 	       && checksum_field1 == BUF_NO_CHECKSUM_MAGIC);
 }
 
-/** Checks if the compressed page is in full crc32 checksum format.
-@param[in]	read_buf	database page
-@param[in]	checksum_field	checksum field
-@param[in]	size		size of the data in the page
-@return true if the page is in full crc32 checksum format. */
-bool buf_compress_page_is_checksum_valid_full_crc32(
-	const byte*	read_buf,
-	size_t		checksum_field,
-	ulint		size)
-{
-	const uint32_t	full_crc32 = buf_calc_compress_page_full_crc32(
-					read_buf, size);
-
-	return checksum_field == full_crc32;
-}
-
 /** Checks if the page is in full crc32 checksum format.
 @param[in]	read_buf	database page
 @param[in]	checksum_field	checksum field
@@ -977,45 +961,22 @@ static void buf_page_check_lsn(bool check_lsn, const byte* read_buf)
 #endif /* !UNIV_INNOCHECKSUM */
 }
 
-/** Get the actual data size of the compressed full crc32 page.
-@param[in]	buf	compressed page
-@return size of the actual data size */
-ulint buf_page_compress_fcrc32_get_data_size(const byte* buf)
-{
-	ulint page_no = mach_read_from_4(buf + FIL_PAGE_OFFSET);
-	if (page_no == 0) {
-		return srv_page_size;
-	}
-
-	const unsigned	ptype = mach_read_from_2(buf + FIL_PAGE_TYPE);
-	ut_ad(ptype & 0x8000);
-
-	ulint total_size = (ptype & ~(1UL << FIL_PAGE_COMPRESS_FCRC32_MARKER));
-	total_size = total_size >> 7;
-
-	ut_ad(total_size > 0);
-
-	ulint offset = mach_read_from_1(
-			buf + FIL_PAGE_COMP_ALGO + (total_size * 256) - 5);
-
-	if ((offset + 4 + 1) > 256) {
-		total_size--;
-	}
-
-	return ((total_size - 1) * 256 + offset);
-}
-
 /** Get the total size of the compressed full crc32 page.
 @param[in]	buf	compressed page
 @return size of the actual data size */
 ulint buf_page_compress_fcrc32_get_size(const byte* buf)
 {
+	/* Note: this is almost the same as
+	fil_page_compress_fcrc32_payload_size, but this size is
+	padded, for checksum calculation. */
+
+	/* FIXME: can't the caller check the page number already? */
 	if (mach_read_from_4(buf + FIL_PAGE_OFFSET) == 0) {
 		return srv_page_size;
 	}
 
 	const unsigned	ptype = mach_read_from_2(buf + FIL_PAGE_TYPE);
-	ut_ad(ptype & 0x8000);
+	ut_ad(ptype & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
 
 	ulint total_size = (ptype & ~(1UL << FIL_PAGE_COMPRESS_FCRC32_MARKER));
 	total_size = total_size >> 7;
@@ -1068,19 +1029,18 @@ buf_page_is_corrupted(
 		});
 nonzero:
 		if (is_compressed && page_no != 0) {
-			if (!buf_compress_page_is_checksum_valid_full_crc32(
-					read_buf, crc32, size)) {
+			if (crc32 != buf_calc_compress_page_full_crc32(
+				    read_buf, size)) {
 				return true;
 			}
 		} else {
-
 			if (!buf_page_is_checksum_valid_full_crc32(
-					read_buf, crc32)) {
+				    read_buf, crc32)) {
 				return true;
 			}
 
 			if (!mach_read_from_4(
-				read_buf + FIL_PAGE_FCRC32_KEY_VERSION)
+				    read_buf + FIL_PAGE_FCRC32_KEY_VERSION)
 			    && memcmp(read_buf + (FIL_PAGE_LSN + 4),
 				      end - FIL_PAGE_FCRC32_END_LSN, 4)) {
 				return true;
@@ -7498,7 +7458,7 @@ buf_page_encrypt(
 		&& (!crypt_data->is_default_encryption()
 		    || srv_encrypt_tables);
 
-	bool page_compressed = fil_space_t::is_compressed(space->flags);
+	bool page_compressed = space->is_compressed();
 
 	if (!encrypted && !page_compressed) {
 		/* No need to encrypt or page compress the page.
@@ -7580,12 +7540,10 @@ not_compressed:
 		if (full_crc32) {
 			buf_page_comp_full_crc32_checksum(tmp);
 #ifdef UNIV_DEBUG
-			{
-				page_t	page[UNIV_PAGE_SIZE_MAX];
-				memcpy(page, tmp, srv_page_size);
-				ut_ad(!buf_page_is_corrupted(
-						true, page, space->flags));
-			}
+			page_t	page[UNIV_PAGE_SIZE_MAX];
+			memcpy(page, tmp, srv_page_size);
+			ut_ad(!buf_page_is_corrupted(true, page,
+						     space->flags));
 #endif
 		}
 

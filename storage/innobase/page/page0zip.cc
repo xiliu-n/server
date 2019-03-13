@@ -2,7 +2,7 @@
 
 Copyright (c) 2005, 2016, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
-Copyright (c) 2014, 2018, MariaDB Corporation.
+Copyright (c) 2014, 2019, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -4975,12 +4975,9 @@ page_zip_calc_checksum(
 /** Verify a compressed page's checksum.
 @param[in]	data		compressed page
 @param[in]	size		size of compressed page
-@return TRUE if the stored checksum is valid according to the value of
+@return whether the stored checksum is valid according to the value of
 innodb_checksum_algorithm */
-ibool
-page_zip_verify_checksum(
-        const void*     data,
-        ulint           size)
+bool page_zip_verify_checksum(const void* data, ulint size)
 {
 	const uint32_t stored = mach_read_from_4(
 		static_cast<const byte*>(data) + FIL_PAGE_SPACE_OR_CHKSUM);

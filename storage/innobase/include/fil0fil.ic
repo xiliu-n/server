@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2015, 2018, MariaDB Corporation.
+Copyright (c) 2015, 2019, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -88,8 +88,9 @@ fil_page_type_validate(
 {
 	ulint page_type = mach_read_from_2(page + FIL_PAGE_TYPE);
 
-	if ((page_type & 0x8000) && fil_space_t::full_crc32(space->flags)
-	    && fil_space_t::is_compressed(space->flags)) {
+	if ((page_type & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER)
+	    && space->full_crc32()
+	    && space->is_compressed()) {
 		return true;
 	}
 

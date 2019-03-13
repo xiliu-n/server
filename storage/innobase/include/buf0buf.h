@@ -682,7 +682,7 @@ buf_block_buf_fix_inc_func(
 @param[in]	read_buf	database page
 @param[in]	page_size	page frame size
 @return whether the page is all zeroes */
-bool buf_page_is_zeroes(const byte* read_buf, size_t page_size);
+bool buf_page_is_zeroes(const void* read_buf, size_t page_size);
 
 /** Checks if the page is in crc32 checksum format.
 @param[in]	read_buf		database page
@@ -719,11 +719,6 @@ buf_page_is_checksum_valid_none(
 	ulint				checksum_field1,
 	ulint				checksum_field2)
 	MY_ATTRIBUTE((nonnull(1), warn_unused_result));
-
-bool buf_compress_page_is_checksum_valid_full_crc32(
-	const byte*	read_buf,
-	size_t		checksum_field,
-	ulint		size);
 
 /** Checks if the page is in full crc32 checksum format.
 @param[in]	read_buf	database page
@@ -769,7 +764,7 @@ inline bool buf_page_is_compressed(const byte* read_buf, ulint fsp_flags)
 {
 	ulint page_type = mach_read_from_2(read_buf + FIL_PAGE_TYPE);
 	return FSP_FLAGS_FCRC32_HAS_MARKER(fsp_flags)
-		? (page_type & 0x8000)
+		? !!(page_type & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER)
 		: page_type == FIL_PAGE_PAGE_COMPRESSED;
 }
 
@@ -1452,11 +1447,6 @@ buf_page_encrypt(
 	fil_space_t*	space,
 	buf_page_t*	bpage,
 	byte*		src_frame);
-
-/** Get the actual data size of the compressed full crc32 page.
-@param[in]	buf	compressed page
-@return size of the actual data size */
-ulint buf_page_compress_fcrc32_get_data_size(const byte* buf);
 
 /** Get the total size of the compressed full crc32 page.
 @param[in]	buf	compressed page

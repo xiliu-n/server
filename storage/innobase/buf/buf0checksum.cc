@@ -26,7 +26,6 @@ Created Aug 11, 2011 Vasil Dimov
 
 #include "buf0checksum.h"
 #include "fil0fil.h"
-#include "ut0crc32.h"
 #include "ut0rnd.h"
 
 #ifndef UNIV_INNOCHECKSUM
@@ -108,15 +107,6 @@ buf_calc_page_old_checksum(const byte* page)
 uint32_t buf_calc_page_full_crc32(const byte* page)
 {
 	return ut_crc32(page, srv_page_size - FIL_PAGE_FCRC32_CHECKSUM);
-}
-
-/** Calculate the CRC32 checksum for the compress page.
-@param[in]	page	buffer page
-@param[in]	size	size of the data
-@return CRC32 value */
-uint32_t buf_calc_compress_page_full_crc32(const byte* page, ulint size)
-{
-	return ut_crc32(page, size - 4);
 }
 
 /** Return a printable string describing the checksum algorithm.

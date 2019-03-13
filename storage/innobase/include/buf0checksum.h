@@ -28,6 +28,7 @@ Created Aug 11, 2011 Vasil Dimov
 #define buf0checksum_h
 
 #include "buf0types.h"
+#include "ut0crc32.h"
 
 /** Calculate the CRC32 checksum of a page. The value is stored to the page
 when it is written to a file and also checked for a match when reading from
@@ -60,6 +61,15 @@ buf_calc_page_old_checksum(const byte* page);
 @param[in]	page	buffer page (srv_page_size bytes)
 @return CRC32 value */
 uint32_t buf_calc_page_full_crc32(const byte* page);
+
+/** Calculate the CRC32 checksum for the compress page.
+@param[in]	page	buffer page
+@param[in]	size	size of the data
+@return CRC32 value */
+inline uint32_t buf_calc_compress_page_full_crc32(const byte* page, ulint size)
+{
+	return ut_crc32(page, size - 4);
+}
 
 /** Calculate the CRC32 checksum for the compressed page.
 @param[in]	page	buffer page

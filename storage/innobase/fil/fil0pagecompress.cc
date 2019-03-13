@@ -519,6 +519,30 @@ bool fil_page_decompress_low(
 	return false;
 }
 
+/** Get the full_crc32 page_compressed payload size.
+@param[in]	buf	compressed page
+@return compressed payload size in bytes */
+static ulint fil_page_compress_fcrc32_payload_size(const byte* buf)
+{
+	const uint ptype = mach_read_from_2(buf + FIL_PAGE_TYPE);
+	ut_ad(ptype & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
+
+	uint total_size = (ptype & ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER))
+		>> 7;
+	ut_ad(total_size > 0);
+
+	/* FIXME: Only reserve 1 byte for those algorithms that need
+	to know the compressed stream length! */
+	ulint offset = buf[(FIL_PAGE_COMP_ALGO - 4 - 1) + (total_size << 8)];
+
+	/* FIXME: Is this rounding really correct? */
+	if (offset > 256 - 4 - 1) {
+		total_size--;
+	}
+
+	return (total_size - 1) << 8 | offset;
+}
+
 /** Decompress a page for full crc32 format.
 @param[in,out]	tmp_buf	temporary buffer (of innodb_page_size)
 @param[in,out]	buf	possibly compressed page buffer
@@ -537,7 +561,7 @@ ulint fil_page_decompress_for_full_crc32(
 		return srv_page_size;
 	}
 
-	ulint actual_size = buf_page_compress_fcrc32_get_data_size(buf);
+	ulint actual_size = fil_page_compress_fcrc32_payload_size(buf);
 	ulint header_len = FIL_PAGE_COMP_ALGO;
 	uint64_t comp_algo = fil_space_t::get_compression_algo(flags);
 
@@ -619,8 +643,7 @@ ulint fil_page_decompress(
 	ulint	flags)
 {
 	if (fil_space_t::full_crc32(flags)) {
-		return fil_page_decompress_for_full_crc32(
-				tmp_buf, buf, flags);
+		return fil_page_decompress_for_full_crc32(tmp_buf, buf, flags);
 	}
 
 	return fil_page_decompress_for_non_full_crc32(tmp_buf, buf);

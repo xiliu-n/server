@@ -341,7 +341,7 @@ struct fil_space_t {
 		return FSP_FLAGS_HAS_PAGE_COMPRESSION(flags);
 	}
 	/** @return whether the compression enabled for the tablespace. */
-	bool is_compressed() { return is_compressed(flags); }
+	bool is_compressed() const { return is_compressed(flags); }
 
 	/** Get the compression algorithm for full crc32 format.
 	@param[in]	flags	tablespace flags
@@ -353,6 +353,11 @@ struct fil_space_t {
 		}
 
 		return 0;
+	}
+	/** @return the page_compressed algorithm
+	@retval 0 if not page_compressed */
+	ulint get_compression_algo() const {
+		return fil_space_t::get_compression_algo(flags);
 	}
 	/** Whether the full checksum matches with non full checksum flags.
 	@param[in]	flags		flags present

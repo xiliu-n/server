@@ -788,57 +788,41 @@ buf_dblwr_update(
 	}
 }
 
+#ifdef UNIV_DEBUG
 /** Check the LSN values on the page.
-@param[in]	page		page to check
-@param[in]	fsp_flags	tablespace flags */
-static
-void
-buf_dblwr_check_page_lsn(
-	const page_t*	page,
-	ulint		fsp_flags)
+@param[in]	page	page to check
+@param[in]	s	tablespace */
+static void buf_dblwr_check_page_lsn(const page_t* page, const fil_space_t& s)
 {
-	bool full_crc32 = fil_space_t::full_crc32(fsp_flags);
-	bool page_compressed = fil_space_t::is_compressed(fsp_flags);
-	ulint key_version = buf_page_get_key_version(page, fsp_flags);
-
 	/* Ignore page compressed or encrypted pages */
-	if (page_compressed || key_version) {
+	if (s.is_compressed()
+	    || buf_page_get_key_version(page, s.flags)) {
 		return;
 	}
 
-	bool lsn_mismatch = false;
-
-	if (!full_crc32) {
-		if (memcmp(page + (FIL_PAGE_LSN + 4),
-			   page + (srv_page_size
-				   - FIL_PAGE_END_LSN_OLD_CHKSUM + 4), 4)) {
-			lsn_mismatch = true;
-		}
-	} else if (memcmp(page + (FIL_PAGE_LSN + 4),
-			   page + (srv_page_size
-				   - FIL_PAGE_FCRC32_END_LSN), 4)) {
-		lsn_mismatch = true;
-	}
-
-	if (lsn_mismatch) {
-		const ulint	lsn1 = mach_read_from_4(
-			page + FIL_PAGE_LSN + 4);
-		ulint	lsn2 = mach_read_from_4(
-			page + srv_page_size - FIL_PAGE_END_LSN_OLD_CHKSUM
-			+ 4);
-
-		if (full_crc32) {
-			lsn2 = mach_read_from_4(
-				page + (srv_page_size
-					- FIL_PAGE_FCRC32_END_LSN));
-		}
-
-		ib::error() << "The page to be written seems corrupt!"
+	const unsigned lsn1 = mach_read_from_4(page + FIL_PAGE_LSN + 4),
+		lsn2 = mach_read_from_4(page + srv_page_size
+					- (s.full_crc32()
+					   ? FIL_PAGE_FCRC32_END_LSN
+					   : FIL_PAGE_END_LSN_OLD_CHKSUM - 4));
+	if (UNIV_UNLIKELY(lsn1 != lsn2)) {
+		ib::error() << "The page to be written to "
+			    << s.chain.start->name <<
+			" seems corrupt!"
 			" The low 4 bytes of LSN fields do not match"
 			" (" << lsn1 << " != " << lsn2 << ")!"
 			" Noticed in the buffer pool.";
 	}
 }
+
+static void buf_dblwr_check_page_lsn(const buf_page_t& b, const byte* page)
+{
+	if (fil_space_t* space = fil_space_acquire_for_io(b.id.space())) {
+		buf_dblwr_check_page_lsn(page, *space);
+		space->release_for_io();
+	}
+}
+#endif /* UNIV_DEBUG */
 
 /********************************************************************//**
 Asserts when a corrupt block is find during writing out data to the
@@ -955,13 +939,7 @@ buf_dblwr_write_block_to_datafile(
 			const_cast<buf_page_t*>(bpage));
 
 		ut_a(buf_block_get_state(block) == BUF_BLOCK_FILE_PAGE);
-		fil_space_t*	space = fil_space_acquire_silent(bpage->id.space());
-
-		if (space != NULL) {
-			buf_dblwr_check_page_lsn(block->frame, space->flags);
-			space->release();
-		}
-
+		ut_d(buf_dblwr_check_page_lsn(block->page, block->frame));
 		fil_io(request,
 		       sync, bpage->id, bpage->zip_size(), 0, bpage->real_size,
 		       frame, block);
@@ -1054,16 +1032,7 @@ try_again:
 		/* Check that the actual page in the buffer pool is
 		not corrupt and the LSN values are sane. */
 		buf_dblwr_check_block(block);
-
-		fil_space_t* space = fil_space_acquire_silent(
-					block->page.id.space());
-
-		if (space != NULL) {
-			/* Check that the page as written to the doublewrite
-			buffer has sane LSN values. */
-			buf_dblwr_check_page_lsn(write_buf + len2, space->flags);
-			space->release();
-		}
+		ut_d(buf_dblwr_check_page_lsn(block->page, write_buf + len2));
 	}
 
 	/* Write out the first block of the doublewrite buffer */
@@ -1243,14 +1212,8 @@ buf_dblwr_write_single_page(
 		/* Check that the page as written to the doublewrite
 		buffer has sane LSN values. */
 		if (!bpage->zip.data) {
-			fil_space_t* space = fil_space_acquire_silent(
-						bpage->id.space());
-			if (space != NULL) {
-				buf_dblwr_check_page_lsn(
-					((buf_block_t*) bpage)->frame,
-					space->flags);
-				space->release();
-			}
+			ut_d(buf_dblwr_check_page_lsn(
+				     *bpage, ((buf_block_t*) bpage)->frame));
 		}
 	}
 

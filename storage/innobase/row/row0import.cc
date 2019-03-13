@@ -3318,7 +3318,7 @@ fil_iterate(
 		return DB_OUT_OF_MEMORY;
 	}
 
-	ulint	   actual_space_id = 0;
+	ulint actual_space_id = 0;
 	const bool full_crc32 = fil_space_t::full_crc32(
 		callback.get_space_flags());
 
@@ -3379,15 +3379,9 @@ fil_iterate(
 			byte*	src = readptr + i * size;
 			const ulint page_no = page_get_page_no(src);
 			if (!page_no && block->page.id.page_no()) {
-				const ulint* b = reinterpret_cast<const ulint*>
-					(src);
-				const ulint* const e = b + size / sizeof *b;
-				do {
-					if (*b++) {
-						goto page_corrupted;
-					}
-				} while (b != e);
-
+				if (!buf_page_is_zeroes(src, size)) {
+					goto page_corrupted;
+				}
 				/* Proceed to the next page,
 				because this one is all zero. */
 				continue;
@@ -3403,8 +3397,9 @@ page_corrupted:
 				goto func_exit;
 			}
 
-			if (page_no == 0) {
-				actual_space_id = mach_read_from_4(src + FIL_PAGE_SPACE_ID);		
+			if (block->page.id.page_no() == 0) {
+				actual_space_id = mach_read_from_4(
+					src + FIL_PAGE_SPACE_ID);
 			}
 
 			const bool page_compressed =
