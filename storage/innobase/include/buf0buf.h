@@ -678,6 +678,12 @@ buf_block_buf_fix_inc_func(
 # endif /* UNIV_DEBUG */
 #endif /* !UNIV_INNOCHECKSUM */
 
+/** Check if a page is all zeroes.
+@param[in]	read_buf	database page
+@param[in]	page_size	page frame size
+@return whether the page is all zeroes */
+bool buf_page_is_zeroes(const byte* read_buf, size_t page_size);
+
 /** Checks if the page is in crc32 checksum format.
 @param[in]	read_buf		database page
 @param[in]	checksum_field1		new checksum field
@@ -714,6 +720,11 @@ buf_page_is_checksum_valid_none(
 	ulint				checksum_field2)
 	MY_ATTRIBUTE((nonnull(1), warn_unused_result));
 
+bool buf_compress_page_is_checksum_valid_full_crc32(
+	const byte*	read_buf,
+	size_t		checksum_field,
+	ulint		size);
+
 /** Checks if the page is in full crc32 checksum format.
 @param[in]	read_buf	database page
 @param[in]	checksum_field	checksum field
@@ -746,6 +757,20 @@ inline uint32_t buf_page_get_key_version(const byte* read_buf, ulint fsp_flags)
 		? mach_read_from_4(read_buf + FIL_PAGE_FCRC32_KEY_VERSION)
 		: mach_read_from_4(read_buf
 				   + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION);
+}
+
+/** Read the compression info from the page. In full crc32 format,
+compression info is at MSB of page type. In other format, it is
+stored in page type.
+@param[in]	read_buf	database page
+@param[in]	fsp_flags	tablespace flags
+@return true if page is compressed. */
+inline bool buf_page_is_compressed(const byte* read_buf, ulint fsp_flags)
+{
+	ulint page_type = mach_read_from_2(read_buf + FIL_PAGE_TYPE);
+	return FSP_FLAGS_FCRC32_HAS_MARKER(fsp_flags)
+		? (page_type & 0x8000)
+		: page_type == FIL_PAGE_PAGE_COMPRESSED;
 }
 
 #ifndef UNIV_INNOCHECKSUM
@@ -1410,6 +1435,10 @@ buf_flush_update_zip_checksum(
 	ulint		size,
 	lsn_t		lsn);
 
+/** Write the full crc32 checksum value for the compressed page.
+@param[in]	src_frame	page to be calculated for full crc32*/
+void buf_page_comp_full_crc32_checksum(byte* src_frame);
+
 /** Encryption and page_compression hook that is called just before
 a page is written to disk.
 @param[in,out]	space		tablespace
@@ -1423,6 +1452,16 @@ buf_page_encrypt(
 	fil_space_t*	space,
 	buf_page_t*	bpage,
 	byte*		src_frame);
+
+/** Get the actual data size of the compressed full crc32 page.
+@param[in]	buf	compressed page
+@return size of the actual data size */
+ulint buf_page_compress_fcrc32_get_data_size(const byte* buf);
+
+/** Get the total size of the compressed full crc32 page.
+@param[in]	buf	compressed page
+@return size of the actual data size */
+ulint buf_page_compress_fcrc32_get_size(const byte* buf);
 
 /** @brief The temporary memory structure.
 

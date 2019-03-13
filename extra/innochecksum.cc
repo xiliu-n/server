@@ -461,7 +461,7 @@ is_page_corrupted(
 		return (false);
 	}
 
-	if (!zip_size) {
+	if (!zip_size && !(is_compressed && use_full_crc32)) {
 		/* check the stored log sequence numbers
 		for uncompressed tablespace. */
 		logseq = mach_read_from_4(buf + FIL_PAGE_LSN + 4);

@@ -4972,15 +4972,15 @@ page_zip_calc_checksum(
 	return(0);
 }
 
-/**********************************************************************//**
-Verify a compressed page's checksum.
+/** Verify a compressed page's checksum.
+@param[in]	data		compressed page
+@param[in]	size		size of compressed page
 @return TRUE if the stored checksum is valid according to the value of
 innodb_checksum_algorithm */
 ibool
 page_zip_verify_checksum(
-/*=====================*/
-	const void*	data,		/*!< in: compressed page */
-	ulint		size)		/*!< in: size of compressed page */
+        const void*     data,
+        ulint           size)
 {
 	const uint32_t stored = mach_read_from_4(
 		static_cast<const byte*>(data) + FIL_PAGE_SPACE_OR_CHKSUM);

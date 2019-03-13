@@ -2026,15 +2026,22 @@ dberr_t PageConverter::operator()(buf_block_t* block) UNIV_NOTHROW
 	if (err != DB_SUCCESS) return err;
 
 	const bool full_crc32 = fil_space_t::full_crc32(get_space_flags());
+	const bool page_compressed = fil_space_t::is_compressed(get_space_flags());
 
 	if (!block->page.zip.data) {
 		if (full_crc32
-		    && block->page.encrypted && block->page.id.page_no() > 0) {
+		    && (block->page.encrypted || page_compressed)
+		    && block->page.id.page_no() > 0) {
 			byte* page = block->frame;
 			mach_write_to_8(page + FIL_PAGE_LSN, m_current_lsn);
-			mach_write_to_4(
-				page + srv_page_size - FIL_PAGE_FCRC32_END_LSN,
-				(ulint) m_current_lsn);
+
+			if (!page_compressed) {
+				mach_write_to_4(
+					page + (srv_page_size
+						- FIL_PAGE_FCRC32_END_LSN),
+					(ulint) m_current_lsn);
+			}
+
 			return err;
 		}
 
@@ -3311,6 +3318,7 @@ fil_iterate(
 		return DB_OUT_OF_MEMORY;
 	}
 
+	ulint	   actual_space_id = 0;
 	const bool full_crc32 = fil_space_t::full_crc32(
 		callback.get_space_flags());
 
@@ -3395,9 +3403,18 @@ page_corrupted:
 				goto func_exit;
 			}
 
-			const bool page_compressed
-				= fil_page_is_compressed_encrypted(src)
-				|| fil_page_is_compressed(src);
+			if (page_no == 0) {
+				actual_space_id = mach_read_from_4(src + FIL_PAGE_SPACE_ID);		
+			}
+
+			const bool page_compressed =
+				(full_crc32
+				 && fil_space_t::is_compressed(
+					callback.get_space_flags())
+				 && buf_page_is_compressed(
+					src, callback.get_space_flags()))
+				|| (fil_page_is_compressed_encrypted(src)
+				    || fil_page_is_compressed(src));
 
 			if (page_compressed && block->page.zip.data) {
 				goto page_corrupted;
@@ -3427,7 +3444,7 @@ not_encrypted:
 				}
 
 				decrypted = fil_space_decrypt(
-					block->page.id.space(),
+					actual_space_id,
 					iter.crypt_data, dst,
 					callback.physical_size(),
 					callback.get_space_flags(),
@@ -3452,7 +3469,8 @@ not_encrypted:
 			to decompress it before adjusting further. */
 			if (page_compressed) {
 				ulint compress_length = fil_page_decompress(
-					page_compress_buf, dst);
+					page_compress_buf, dst,
+					callback.get_space_flags());
 				ut_ad(compress_length != srv_page_size);
 				if (compress_length == 0) {
 					goto page_corrupted;
@@ -3555,6 +3573,12 @@ not_encrypted:
 				}
 
 				updated = true;
+			}
+
+			/* Write checksum for the compressed full crc32 page.*/
+			if (full_crc32 && page_compressed && updated) {
+				byte *dest = writeptr + i * size;
+				buf_page_comp_full_crc32_checksum(dest);
 			}
 		}
 

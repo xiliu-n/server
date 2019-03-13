@@ -334,7 +334,7 @@ struct fil_space_t {
 		if (full_crc32(flags)) {
 			ulint algo = FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(
 					flags);
-			ut_ad(algo < 6);
+			ut_ad(algo < 7);
 			return (algo > 0);
 		}
 
@@ -342,6 +342,18 @@ struct fil_space_t {
 	}
 	/** @return whether the compression enabled for the tablespace. */
 	bool is_compressed() { return is_compressed(flags); }
+
+	/** Get the compression algorithm for full crc32 format.
+	@param[in]	flags	tablespace flags
+	@return algorithm type of tablespace */
+	static ulint get_compression_algo(ulint flags)
+	{
+		if (full_crc32(flags)) {
+			return FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(flags);
+		}
+
+		return 0;
+	}
 	/** Whether the full checksum matches with non full checksum flags.
 	@param[in]	flags		flags present
 	@param[in]	expected	expected flags
@@ -351,7 +363,8 @@ struct fil_space_t {
 		ut_ad(full_crc32(flags));
 
 		if (full_crc32(expected)) {
-			return false;
+			return (get_compression_algo(flags)
+				== get_compression_algo(expected));
 		}
 
 		ulint page_ssize = FSP_FLAGS_FCRC32_GET_PAGE_SSIZE(flags);
@@ -362,11 +375,7 @@ struct fil_space_t {
 			return false;
 		}
 
-		if (FSP_FLAGS_HAS_PAGE_COMPRESSION(expected)) {
-			return false;
-		}
-
-		return true;
+		return (is_compressed(expected) == is_compressed(flags));
 	}
 	/** Whether old tablespace flags match full_crc32 flags.
 	@param[in]	flags		flags present
@@ -376,8 +385,7 @@ struct fil_space_t {
 	{
 		ut_ad(!full_crc32(flags));
 
-		if (!full_crc32(expected)
-		    || FSP_FLAGS_HAS_PAGE_COMPRESSION(expected)) {
+		if (!full_crc32(expected)) {
 			return false;
 		}
 
@@ -390,7 +398,7 @@ struct fil_space_t {
 			return false;
 		}
 
-		return true;
+		return (is_compressed(flags) == is_compressed(expected));
 	}
 	/** Whether both fsp flags are equivalent */
 	static bool is_flags_equal(ulint flags, ulint expected)
@@ -647,6 +655,9 @@ or 64 bites of zero if no encryption */
 /** This overloads FIL_PAGE_FILE_FLUSH_LSN for RTREE Split Sequence Number */
 #define	FIL_RTREE_SPLIT_SEQ_NUM	FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 
+/** This overloads FIL_PAGE_FILE_FLUSH_LSN for compressed page method */
+#define FIL_PAGE_COMP_ALGO	FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
+
 /** starting from 4.1.x this contains the space id of the page */
 #define FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID  34U
 
@@ -659,12 +670,28 @@ For non-encrypted page, it contains 0. */
 #define FIL_PAGE_FCRC32_KEY_VERSION	0
 
 /* Following are used when page compression is used */
+/** Number of bytes used to store actual payload data size on
+compressed pages. */
+#define FIL_PAGE_COMP_SIZE		0
+
+/** Number of bytes length to store actual compression info. */
+#define FIL_PAGE_COMP_METADATA_LEN		2
+
+/** Number of bytes used to store actual compression method. */
+#define FIL_PAGE_ENCRYPT_COMP_ALGO		2
+
+/** Number of bytes length to store actual compression info in encrypted page. */
+#define FIL_PAGE_ENCRYPT_COMP_METADATA_LEN	4
+
+#if 0
 #define FIL_PAGE_COMPRESSED_SIZE 2      /*!< Number of bytes used to store
 					actual payload data size on
 					compressed pages. */
 #define FIL_PAGE_COMPRESSION_METHOD_SIZE 2
 					/*!< Number of bytes used to store
 					actual compression method. */
+#endif
+
 /* @} */
 /** File page trailer @{ */
 #define FIL_PAGE_END_LSN_OLD_CHKSUM 8	/*!< the low 4 bytes of this are used
@@ -715,6 +742,8 @@ For non-encrypted page, it contains 0. */
 Note: FIL_PAGE_TYPE_INSTANT maps to the same as FIL_PAGE_INDEX. */
 #define FIL_PAGE_TYPE_LAST	FIL_PAGE_TYPE_UNKNOWN
 					/*!< Last page type */
+/** Used to indicate compressed page in full crc32 format. */
+#define FIL_PAGE_COMPRESS_FCRC32_MARKER	15
 /* @} */
 
 /** @return whether the page type is B-tree or R-tree index */

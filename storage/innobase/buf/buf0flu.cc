@@ -728,9 +728,9 @@ void buf_flush_write_complete(buf_page_t* bpage, bool dblwr)
 
 /** Calculate the checksum of a page from compressed table and update
 the page.
-@param[in,out]	page	page to update
-@param[in]	size	compressed page size
-@param[in]	lsn	LSN to stamp on the page */
+@param[in,out]	page		page to update
+@param[in]	size		compressed page size
+@param[in]	lsn		LSN to stamp on the page */
 void
 buf_flush_update_zip_checksum(
 	buf_frame_t*	page,
@@ -776,8 +776,6 @@ buf_flush_init_for_writing(
 		/* If page is encrypted in full crc32 format then
 		checksum stored already as a part of fil_encrypt_buf() */
 		ut_ad(use_full_checksum);
-		ut_ad(mach_read_from_4(
-			page + FIL_PAGE_FCRC32_KEY_VERSION));
 		return;
 	}
 

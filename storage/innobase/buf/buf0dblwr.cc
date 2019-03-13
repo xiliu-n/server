@@ -335,20 +335,6 @@ too_small:
 	goto start_again;
 }
 
-/** Check if a page is all zeroes.
-@param[in]	read_buf	database page
-@param[in]	page_size	page frame size
-@return	whether the page is all zeroes */
-static bool buf_page_is_zeroes(const byte* read_buf, size_t page_size)
-{
-	for (ulint i = 0; i < page_size; i++) {
-		if (read_buf[i] != 0) {
-			return false;
-		}
-	}
-	return true;
-}
-
 /**
 At database startup initializes the doublewrite buffer memory structure if
 we already have a doublewrite buffer created in the data files. If we are
@@ -620,7 +606,8 @@ buf_dblwr_process()
 		} else {
 			/* Decompress the page before
 			validating the checksum. */
-			ulint decomp = fil_page_decompress(buf, read_buf);
+			ulint decomp = fil_page_decompress(buf, read_buf,
+							   space->flags);
 			if (!decomp || (zip_size && decomp != srv_page_size)) {
 				goto bad;
 			}
@@ -648,7 +635,7 @@ bad:
 				<< " from the doublewrite buffer.";
 		}
 
-		ulint decomp = fil_page_decompress(buf, page);
+		ulint decomp = fil_page_decompress(buf, page, space->flags);
 		if (!decomp || (zip_size && decomp != srv_page_size)) {
 			goto bad_doublewrite;
 		}
@@ -801,16 +788,18 @@ buf_dblwr_update(
 	}
 }
 
-/********************************************************************//**
-Check the LSN values on the page. */
+/** Check the LSN values on the page.
+@param[in]	page		page to check
+@param[in]	fsp_flags	tablespace flags */
 static
 void
 buf_dblwr_check_page_lsn(
-/*=====================*/
-	const page_t*	page)		/*!< in: page to check */
+	const page_t*	page,
+	ulint		fsp_flags)
 {
-	ibool page_compressed = (mach_read_from_2(page+FIL_PAGE_TYPE) == FIL_PAGE_PAGE_COMPRESSED);
-	uint key_version = mach_read_from_4(page + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION);
+	bool full_crc32 = fil_space_t::full_crc32(fsp_flags);
+	bool page_compressed = fil_space_t::is_compressed(fsp_flags);
+	ulint key_version = buf_page_get_key_version(page, fsp_flags);
 
 	/* Ignore page compressed or encrypted pages */
 	if (page_compressed || key_version) {
@@ -819,26 +808,30 @@ buf_dblwr_check_page_lsn(
 
 	bool lsn_mismatch = false;
 
-	// MDEV-12026 FIXME: invoke fil_space_t::full_crc32()
-	if (memcmp(page + (FIL_PAGE_LSN + 4),
-		   page + (srv_page_size
-			   - FIL_PAGE_END_LSN_OLD_CHKSUM + 4),
-		   4)) {
+	if (!full_crc32) {
 		if (memcmp(page + (FIL_PAGE_LSN + 4),
 			   page + (srv_page_size
-				   - FIL_PAGE_FCRC32_END_LSN),
-			   4)) {
+				   - FIL_PAGE_END_LSN_OLD_CHKSUM + 4), 4)) {
 			lsn_mismatch = true;
 		}
+	} else if (memcmp(page + (FIL_PAGE_LSN + 4),
+			   page + (srv_page_size
+				   - FIL_PAGE_FCRC32_END_LSN), 4)) {
+		lsn_mismatch = true;
 	}
 
 	if (lsn_mismatch) {
-		// MDEV-12026 FIXME: lsn2 depends on fil_space_t::full_crc32()!
 		const ulint	lsn1 = mach_read_from_4(
 			page + FIL_PAGE_LSN + 4);
-		const ulint	lsn2 = mach_read_from_4(
+		ulint	lsn2 = mach_read_from_4(
 			page + srv_page_size - FIL_PAGE_END_LSN_OLD_CHKSUM
 			+ 4);
+
+		if (full_crc32) {
+			lsn2 = mach_read_from_4(
+				page + (srv_page_size
+					- FIL_PAGE_FCRC32_END_LSN));
+		}
 
 		ib::error() << "The page to be written seems corrupt!"
 			" The low 4 bytes of LSN fields do not match"
@@ -962,7 +955,12 @@ buf_dblwr_write_block_to_datafile(
 			const_cast<buf_page_t*>(bpage));
 
 		ut_a(buf_block_get_state(block) == BUF_BLOCK_FILE_PAGE);
-		buf_dblwr_check_page_lsn(block->frame);
+		fil_space_t*	space = fil_space_acquire_silent(bpage->id.space());
+
+		if (space != NULL) {
+			buf_dblwr_check_page_lsn(block->frame, space->flags);
+			space->release();
+		}
 
 		fil_io(request,
 		       sync, bpage->id, bpage->zip_size(), 0, bpage->real_size,
@@ -1057,9 +1055,15 @@ try_again:
 		not corrupt and the LSN values are sane. */
 		buf_dblwr_check_block(block);
 
-		/* Check that the page as written to the doublewrite
-		buffer has sane LSN values. */
-		buf_dblwr_check_page_lsn(write_buf + len2);
+		fil_space_t* space = fil_space_acquire_silent(
+					block->page.id.space());
+
+		if (space != NULL) {
+			/* Check that the page as written to the doublewrite
+			buffer has sane LSN values. */
+			buf_dblwr_check_page_lsn(write_buf + len2, space->flags);
+			space->release();
+		}
 	}
 
 	/* Write out the first block of the doublewrite buffer */
@@ -1239,8 +1243,14 @@ buf_dblwr_write_single_page(
 		/* Check that the page as written to the doublewrite
 		buffer has sane LSN values. */
 		if (!bpage->zip.data) {
-			buf_dblwr_check_page_lsn(
-				((buf_block_t*) bpage)->frame);
+			fil_space_t* space = fil_space_acquire_silent(
+						bpage->id.space());
+			if (space != NULL) {
+				buf_dblwr_check_page_lsn(
+					((buf_block_t*) bpage)->frame,
+					space->flags);
+				space->release();
+			}
 		}
 	}
 

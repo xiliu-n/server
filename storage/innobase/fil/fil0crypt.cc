@@ -565,7 +565,7 @@ static byte* fil_encrypt_buf_for_non_full_checksum(
 	uint header_len = FIL_PAGE_DATA;
 
 	if (page_compressed) {
-		header_len += (FIL_PAGE_COMPRESSED_SIZE + FIL_PAGE_COMPRESSION_METHOD_SIZE);
+		header_len += FIL_PAGE_ENCRYPT_COMP_METADATA_LEN;
 	}
 
 	/* FIL page header is not encrypted */
@@ -635,8 +635,15 @@ static byte* fil_encrypt_buf_for_full_checksum(
 	const byte*		src_frame,
 	byte*			dst_frame)
 {
-	const uint size = uint(srv_page_size);
+	uint size = uint(srv_page_size);
 	uint key_version = fil_crypt_get_latest_key_version(crypt_data);
+	uint ptype = mach_read_from_2(src_frame + FIL_PAGE_TYPE);
+	const bool page_compressed = (ptype & 0x8000);
+
+	if (page_compressed) {
+		size = buf_page_compress_fcrc32_get_size(src_frame);
+	}
+
 	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 			      + FIL_PAGE_FCRC32_CHECKSUM);
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
@@ -657,8 +664,14 @@ static byte* fil_encrypt_buf_for_full_checksum(
 	ut_a(rc == MY_AES_OK);
 	ut_a(dstlen == srclen);
 
-	ib_uint32_t checksum = buf_calc_page_full_crc32(dst_frame);
-	mach_write_to_4(dst_frame + size - FIL_PAGE_FCRC32_CHECKSUM, checksum);
+	if (page_compressed) {
+		/* Clean the rest of the buffer */
+		memset(dst_frame + size, 0, (srv_page_size - size));
+	} else {
+		ib_uint32_t checksum = buf_calc_page_full_crc32(dst_frame);
+		mach_write_to_4(dst_frame + size - FIL_PAGE_FCRC32_CHECKSUM,
+				checksum);
+	}
 
 	srv_stats.pages_encrypted.inc();
 
@@ -750,15 +763,6 @@ fil_space_encrypt(
 
 	const bool full_crc32 = space->full_crc32();
 
-	if (full_crc32) {
-		/* Write LSN for the full crc32 checksum before
-		encryption. Because lsn is one of the input for encryption. */
-		mach_write_to_8(src_frame + FIL_PAGE_LSN, lsn);
-		mach_write_to_4(
-			src_frame + srv_page_size - FIL_PAGE_FCRC32_END_LSN,
-			(ulint) lsn);
-	}
-
 	byte* tmp = fil_encrypt_buf(crypt_data, space->id, offset, lsn,
 				    src_frame, zip_size, dst_frame,
 				    full_crc32);
@@ -768,42 +772,58 @@ fil_space_encrypt(
 		/* Verify that encrypted buffer is not corrupted */
 		dberr_t err = DB_SUCCESS;
 		byte* src = src_frame;
-		bool page_compressed_encrypted = (mach_read_from_2(tmp+FIL_PAGE_TYPE) == FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED);
-		byte uncomp_mem[UNIV_PAGE_SIZE_MAX];
-		byte tmp_mem[UNIV_PAGE_SIZE_MAX];
-
-		if (page_compressed_encrypted) {
-			memcpy(uncomp_mem, src, srv_page_size);
-			ulint unzipped1 = fil_page_decompress(
-				tmp_mem, uncomp_mem);
-			ut_ad(unzipped1);
-			if (unzipped1 != srv_page_size) {
-				src = uncomp_mem;
-			}
-		}
-
-		ut_ad(full_crc32
-		      || !buf_page_is_corrupted(true, src, space->flags));
-
-		ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
-					space->physical_size(), space->flags,
-					tmp, &err));
-		ut_ad(err == DB_SUCCESS);
-
-		/* Need to decompress the page if it was also compressed */
-		if (page_compressed_encrypted) {
-			byte buf[UNIV_PAGE_SIZE_MAX];
-			memcpy(buf, tmp_mem, srv_page_size);
-			ulint unzipped2 = fil_page_decompress(tmp_mem, buf);
-			ut_ad(unzipped2);
-		}
 
 		if (full_crc32) {
+			byte tmp_mem[UNIV_PAGE_SIZE_MAX];
+			bool compressed = fil_space_t::is_compressed(
+						space->flags);
+			ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
+						space->physical_size(),
+						space->flags, tmp, &err));
+			ut_ad(err == DB_SUCCESS);
 			memcpy(tmp_mem, src, FIL_PAGE_OFFSET);
+			uint size = uint(space->physical_size());
+			if (compressed) {
+				size = buf_page_compress_fcrc32_get_size(
+						tmp_mem);
+			}
+
 			ut_ad(!memcmp(src, tmp_mem,
-				      (space->physical_size()
-				       - FIL_PAGE_FCRC32_CHECKSUM)));
+				      (size - FIL_PAGE_FCRC32_CHECKSUM)));
 		} else {
+			bool page_compressed_encrypted =
+				(mach_read_from_2(tmp+FIL_PAGE_TYPE)
+				 == FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED);
+			byte uncomp_mem[UNIV_PAGE_SIZE_MAX];
+			byte tmp_mem[UNIV_PAGE_SIZE_MAX];
+
+			if (page_compressed_encrypted) {
+				memcpy(uncomp_mem, src, srv_page_size);
+				ulint unzipped1 = fil_page_decompress(
+						tmp_mem, uncomp_mem,
+						space->flags);
+				ut_ad(unzipped1);
+				if (unzipped1 != srv_page_size) {
+					src = uncomp_mem;
+				}
+			}
+
+			ut_ad(!buf_page_is_corrupted(true, src, space->flags));
+
+			ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
+						space->physical_size(),
+						space->flags, tmp, &err));
+			ut_ad(err == DB_SUCCESS);
+
+			/* Need to decompress the page if it was also compressed */
+			if (page_compressed_encrypted) {
+				byte buf[UNIV_PAGE_SIZE_MAX];
+				memcpy(buf, tmp_mem, srv_page_size);
+				ulint unzipped2 = fil_page_decompress(
+						tmp_mem, buf, space->flags);
+				ut_ad(unzipped2);
+			}
+
 			memcpy(tmp_mem + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION,
 			       src + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, 8);
 			ut_ad(!memcmp(src, tmp_mem, space->physical_size()));
@@ -846,9 +866,16 @@ static bool fil_space_decrypt_for_full_checksum(
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	byte* dst = tmp_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	uint dstlen = 0;
-	uint srclen = uint(srv_page_size)
-		- (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
-		   + FIL_PAGE_FCRC32_CHECKSUM);
+	uint size = srv_page_size;
+	uint ptype = mach_read_from_2(src_frame + FIL_PAGE_TYPE);
+	const bool page_compressed = (ptype & 0x8000);
+
+	if (page_compressed) {
+		size = buf_page_compress_fcrc32_get_size(src_frame);
+	}
+
+	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
+			      + FIL_PAGE_FCRC32_CHECKSUM);
 
 	int rc = encryption_scheme_decrypt(src, srclen, dst, &dstlen,
 					   crypt_data, key_version,
@@ -913,8 +940,7 @@ static bool fil_space_decrypt_for_non_full_checksum(
 	uint header_len = FIL_PAGE_DATA;
 
 	if (page_compressed) {
-		header_len += (FIL_PAGE_COMPRESSED_SIZE
-			       + FIL_PAGE_COMPRESSION_METHOD_SIZE);
+		header_len += FIL_PAGE_ENCRYPT_COMP_METADATA_LEN;
 	}
 
 	/* Copy FIL page header, it is not encrypted */
@@ -2781,8 +2807,8 @@ bool fil_space_verify_crypt_checksum(const byte* page, ulint zip_size)
 		}
 		if (zip_size) {
 			return checksum == page_zip_calc_checksum(
-				page, zip_size,
-				SRV_CHECKSUM_ALGORITHM_CRC32)
+					page, zip_size,
+					SRV_CHECKSUM_ALGORITHM_CRC32)
 				|| checksum == page_zip_calc_checksum(
 					page, zip_size,
 					SRV_CHECKSUM_ALGORITHM_INNODB);

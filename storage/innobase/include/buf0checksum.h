@@ -61,6 +61,12 @@ buf_calc_page_old_checksum(const byte* page);
 @return CRC32 value */
 uint32_t buf_calc_page_full_crc32(const byte* page);
 
+/** Calculate the CRC32 checksum for the compressed page.
+@param[in]	page	buffer page
+@param[in]	size	size of the actual data
+@return CRC32 value */
+uint32_t buf_calc_compress_page_full_crc32(const byte* page, ulint size);
+
 /** Return a printable string describing the checksum algorithm.
 @param[in]	algo	algorithm
 @return algorithm name */

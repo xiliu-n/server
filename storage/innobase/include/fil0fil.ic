@@ -88,6 +88,11 @@ fil_page_type_validate(
 {
 	ulint page_type = mach_read_from_2(page + FIL_PAGE_TYPE);
 
+	if ((page_type & 0x8000) && fil_space_t::full_crc32(space->flags)
+	    && fil_space_t::is_compressed(space->flags)) {
+		return true;
+	}
+
 	/* Validate page type */
 	if (!((page_type == FIL_PAGE_PAGE_COMPRESSED ||
 		page_type == FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED ||

@@ -418,6 +418,54 @@ fil_space_is_flushed(
 	return(true);
 }
 
+/** Validate the compression algorithm for full crc32 format.
+@param[in]	space	tablespace object
+@return whether the compression algorithm support */
+static bool fil_comp_algo_validate(fil_space_t*	space)
+{
+	if (!space->full_crc32()) {
+		return true;
+	}
+
+	DBUG_EXECUTE_IF("fil_comp_algo_validate_fail",
+			return false;);
+
+	ulint	comp_algo = fil_space_t::get_compression_algo(space->flags);
+	bool	exist = false;
+	switch (comp_algo) {
+	case PAGE_UNCOMPRESSED:
+	case PAGE_ZLIB_ALGORITHM:
+		exist = true;
+		break;
+	case PAGE_LZ4_ALGORITHM:
+#ifdef HAVE_LZ4
+		exist = true;
+#endif /* HAVE_LZ4 */
+		break;
+	case PAGE_LZO_ALGORITHM:
+#ifdef HAVE_LZO
+		exist = true;
+#endif /* HAVE_LZO */
+		break;
+	case PAGE_LZMA_ALGORITHM:
+#ifdef HAVE_LZMA
+		exist = true;
+#endif /* HAVE_LZMA */
+		break;
+	case PAGE_BZIP2_ALGORITHM:
+#ifdef HAVE_BZIP2
+		exist = true;
+#endif /* HAVE_BZIP2 */
+		break;
+	case PAGE_SNAPPY_ALGORITHM:
+#ifdef HAVE_SNAPPY
+		exist = true;
+#endif /* HAVE_SNAPPY */
+		break;
+	}
+
+	return (exist);
+}
 
 /** Append a file to the chain of files of a space.
 @param[in]	name		file name of a file that is not open
@@ -552,8 +600,15 @@ bool fil_node_t::read_page0(bool first)
 			size_bytes &= ~os_offset_t(mask);
 		}
 
-		if (space->flags != flags
+		if (space->full_crc32() != fil_space_t::full_crc32(flags)
 		    && fil_space_t::is_flags_equal(flags, space->flags)) {
+			space->flags = flags;
+		}
+
+		if (fil_space_t::full_crc32(space->flags)
+		    && fil_space_t::full_crc32(flags)
+		    && (fil_space_t::get_compression_algo(flags)
+		        != fil_space_t::get_compression_algo(space->flags))) {
 			space->flags = flags;
 		}
 
@@ -616,10 +671,16 @@ retry:
 		}
 
 		if (!node->read_page0(first_time_open)) {
+fail:
 			os_file_close(node->handle);
 			node->handle = OS_FILE_CLOSED;
 			return false;
 		}
+
+		if (first_time_open && !fil_comp_algo_validate(space)) {
+			goto fail;
+		}
+
 	} else if (space->purpose == FIL_TYPE_LOG) {
 		node->handle = os_file_create(
 			innodb_log_file_key, node->name, OS_FILE_OPEN,

@@ -495,15 +495,15 @@ page_zip_calc_checksum(
 	ulint				size,
 	srv_checksum_algorithm_t	algo);
 
-/**********************************************************************//**
-Verify a compressed page's checksum.
+/** Verify a compressed page's checksum.
+@param[in]	data		compressed page
+@param[in]	size		size of compressed page
 @return TRUE if the stored checksum is valid according to the value of
 innodb_checksum_algorithm */
 ibool
 page_zip_verify_checksum(
-/*=====================*/
-	const void*	data,	/*!< in: compressed page */
-	ulint		size);	/*!< in: size of compressed page */
+	const void*	data,
+	ulint		size);
 
 #ifndef UNIV_INNOCHECKSUM
 /**********************************************************************//**
