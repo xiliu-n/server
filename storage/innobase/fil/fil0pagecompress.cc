@@ -438,11 +438,11 @@ ulint fil_page_compress(
 @param[in]	actual size	actual size of the page
 @retval true if the page is decompressed or false */
 bool fil_page_decompress_low(
-	byte*	tmp_buf,
-	byte*	buf,
-	ulint	comp_algo,
-	ulint	header_len,
-	ulint 	actual_size)
+	byte*		tmp_buf,
+	byte*		buf,
+	uint64_t	comp_algo,
+	ulint		header_len,
+	ulint		actual_size)
 {
 	switch (comp_algo) {
 	default:
