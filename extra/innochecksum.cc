@@ -281,7 +281,7 @@ static void init_page_size(const byte* buf)
 	const unsigned	flags = mach_read_from_4(buf + FIL_PAGE_DATA
 						 + FSP_SPACE_FLAGS);
 
-	if (FSP_FLAGS_FCRC32_HAS_MARKER(flags)) {
+	if (fil_space_t::full_crc32(flags)) {
 		srv_page_size = fil_space_t::logical_size(flags);
 		physical_page_size = srv_page_size;
 		return;

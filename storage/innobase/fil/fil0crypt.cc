@@ -636,11 +636,7 @@ static byte* fil_encrypt_buf_for_full_crc32(
 	byte*			dst_frame)
 {
 	uint key_version = fil_crypt_get_latest_key_version(crypt_data);
-	const bool compressed = mach_read_from_2(src_frame + FIL_PAGE_TYPE)
-		& 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER;
-	uint size = compressed
-		? buf_page_compress_fcrc32_get_size(src_frame)
-		: uint(srv_page_size);
+	uint size = buf_page_full_crc32_get_size(src_frame);
 	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 			      + FIL_PAGE_FCRC32_CHECKSUM);
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
@@ -661,15 +657,10 @@ static byte* fil_encrypt_buf_for_full_crc32(
 	ut_a(rc == MY_AES_OK);
 	ut_a(dstlen == srclen);
 
-	if (compressed) {
-		/* Clean the rest of the buffer */
-		memset(dst_frame + size, 0, uint(srv_page_size) - size);
-	} else {
-		ib_uint32_t checksum = buf_calc_page_full_crc32(dst_frame);
-		mach_write_to_4(dst_frame + size - FIL_PAGE_FCRC32_CHECKSUM,
-				checksum);
-	}
-
+	/* Clean the rest of the buffer */
+	memset(dst_frame + size, 0, uint(srv_page_size) - size);
+	uint32_t checksum = buf_calc_page_full_crc32(dst_frame);
+	mach_write_to_4(dst_frame + size - FIL_PAGE_FCRC32_CHECKSUM, checksum);
 	srv_stats.pages_encrypted.inc();
 
 	return dst_frame;
@@ -769,22 +760,15 @@ fil_space_encrypt(
 		/* Verify that encrypted buffer is not corrupted */
 		dberr_t err = DB_SUCCESS;
 		byte* src = src_frame;
+		byte tmp_mem[UNIV_PAGE_SIZE_MAX];
 
 		if (full_crc32) {
-			byte tmp_mem[UNIV_PAGE_SIZE_MAX];
-			bool compressed = fil_space_t::is_compressed(
-						space->flags);
+			uint size = buf_page_full_crc32_get_size(tmp);
 			ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
-						space->physical_size(),
-						space->flags, tmp, &err));
+						size, space->flags, tmp,
+						&err));
 			ut_ad(err == DB_SUCCESS);
 			memcpy(tmp_mem, src, FIL_PAGE_OFFSET);
-			uint size = uint(space->physical_size());
-			if (compressed) {
-				size = buf_page_compress_fcrc32_get_size(
-						tmp_mem);
-			}
-
 			ut_ad(!memcmp(src, tmp_mem,
 				      (size - FIL_PAGE_FCRC32_CHECKSUM)));
 		} else {
@@ -792,13 +776,11 @@ fil_space_encrypt(
 				(mach_read_from_2(tmp+FIL_PAGE_TYPE)
 				 == FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED);
 			byte uncomp_mem[UNIV_PAGE_SIZE_MAX];
-			byte tmp_mem[UNIV_PAGE_SIZE_MAX];
 
 			if (page_compressed_encrypted) {
 				memcpy(uncomp_mem, src, srv_page_size);
 				ulint unzipped1 = fil_page_decompress(
-						tmp_mem, uncomp_mem,
-						space->flags);
+					tmp_mem, uncomp_mem, space->flags);
 				ut_ad(unzipped1);
 				if (unzipped1 != srv_page_size) {
 					src = uncomp_mem;
@@ -812,12 +794,10 @@ fil_space_encrypt(
 						space->flags, tmp, &err));
 			ut_ad(err == DB_SUCCESS);
 
-			/* Need to decompress the page if it was also compressed */
 			if (page_compressed_encrypted) {
-				byte buf[UNIV_PAGE_SIZE_MAX];
-				memcpy(buf, tmp_mem, srv_page_size);
+				memcpy(tmp_mem, uncomp_mem, srv_page_size);
 				ulint unzipped2 = fil_page_decompress(
-						tmp_mem, buf, space->flags);
+					uncomp_mem, tmp_mem, space->flags);
 				ut_ad(unzipped2);
 			}
 
@@ -864,10 +844,7 @@ static bool fil_space_decrypt_full_crc32(
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	byte* dst = tmp_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	uint dstlen = 0;
-	uint size = mach_read_from_2(src_frame + FIL_PAGE_TYPE)
-		& 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER
-		? buf_page_compress_fcrc32_get_size(src_frame)
-		: uint(srv_page_size);
+	uint size = buf_page_full_crc32_get_size(src_frame);
 
 	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 			      + FIL_PAGE_FCRC32_CHECKSUM);

@@ -440,8 +440,9 @@ row_undo(
 	case UNDO_UPDATE_TEMPORARY:
 		err = row_undo_mod(node, thr);
 		break;
-	case UNDO_NODE_FETCH_NEXT:
+	default:
 		ut_ad(!"wrong state");
+		err = DB_CORRUPTION;
 	}
 
 	if (locked_data_dict) {

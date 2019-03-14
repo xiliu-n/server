@@ -720,14 +720,6 @@ buf_page_is_checksum_valid_none(
 	ulint				checksum_field2)
 	MY_ATTRIBUTE((nonnull(1), warn_unused_result));
 
-/** Checks if the page is in full crc32 checksum format.
-@param[in]	read_buf	database page
-@param[in]	checksum_field	checksum field
-@return true if the page is in full crc32 checksum format */
-bool buf_page_is_checksum_valid_full_crc32(
-	const byte*	read_buf,
-	size_t		checksum_field);
-
 /** Check if a page is corrupt.
 @param[in]	check_lsn	whether the LSN should be checked
 @param[in]	read_buf	database page
@@ -748,7 +740,7 @@ stored in 26th position.
 @return key version of the page. */
 inline uint32_t buf_page_get_key_version(const byte* read_buf, ulint fsp_flags)
 {
-	return FSP_FLAGS_FCRC32_HAS_MARKER(fsp_flags)
+	return fil_space_t::full_crc32(fsp_flags)
 		? mach_read_from_4(read_buf + FIL_PAGE_FCRC32_KEY_VERSION)
 		: mach_read_from_4(read_buf
 				   + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION);
@@ -763,7 +755,7 @@ stored in page type.
 inline bool buf_page_is_compressed(const byte* read_buf, ulint fsp_flags)
 {
 	ulint page_type = mach_read_from_2(read_buf + FIL_PAGE_TYPE);
-	return FSP_FLAGS_FCRC32_HAS_MARKER(fsp_flags)
+	return fil_space_t::full_crc32(fsp_flags)
 		? !!(page_type & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER)
 		: page_type == FIL_PAGE_PAGE_COMPRESSED;
 }
@@ -1448,10 +1440,10 @@ buf_page_encrypt(
 	buf_page_t*	bpage,
 	byte*		src_frame);
 
-/** Get the total size of the compressed full crc32 page.
+/** Get the compressed or uncompressed size of a full_crc32 page.
 @param[in]	buf	compressed page
-@return size of the actual data size */
-ulint buf_page_compress_fcrc32_get_size(const byte* buf);
+@return the payload size in the file page */
+uint buf_page_full_crc32_get_size(const byte* buf);
 
 /** @brief The temporary memory structure.
 

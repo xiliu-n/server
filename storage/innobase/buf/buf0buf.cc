@@ -467,22 +467,6 @@ buf_pool_register_chunk(
 		chunk->blocks->frame, chunk));
 }
 
-/** Check if a page is all zeroes.
-@param[in]	read_buf	database page
-@param[in]	page_size	page frame size
-@return whether the page is all zeroes */
-bool buf_page_is_zeroes(const void* read_buf, size_t page_size)
-{
-	const ulint* b = reinterpret_cast<const ulint*>(read_buf);
-	const ulint* const e = b + page_size / sizeof *b;
-	do {
-		if (*b++) {
-			return false;
-		}
-	} while (b != e);
-	return true;
-}
-
 /** Decrypt a page.
 @param[in,out]	bpage	Page control block
 @param[in,out]	space	tablespace
@@ -909,19 +893,6 @@ buf_page_is_checksum_valid_none(
 	       && checksum_field1 == BUF_NO_CHECKSUM_MAGIC);
 }
 
-/** Checks if the page is in full crc32 checksum format.
-@param[in]	read_buf	database page
-@param[in]	checksum_field	checksum field
-@return true if the page is in full crc32 checksum format. */
-bool buf_page_is_checksum_valid_full_crc32(
-	const byte*	read_buf,
-	size_t		checksum_field)
-{
-	const uint32_t  full_crc32 = buf_calc_page_full_crc32(read_buf);
-
-	return checksum_field == full_crc32;
-}
-
 /** Checks whether the lsn present in the page is lesser than the
 peek current lsn.
 @param[in]	check_lsn	lsn to check
@@ -961,29 +932,48 @@ static void buf_page_check_lsn(bool check_lsn, const byte* read_buf)
 #endif /* !UNIV_INNOCHECKSUM */
 }
 
-/** Get the total size of the compressed full crc32 page.
+/** Get the compressed or uncompressed size of a full_crc32 page.
 @param[in]	buf	compressed page
-@return size of the actual data size */
-ulint buf_page_compress_fcrc32_get_size(const byte* buf)
+@return the payload size in the file page */
+uint buf_page_full_crc32_get_size(const byte* buf)
 {
 	/* Note: this is almost the same as
 	fil_page_compress_fcrc32_payload_size, but this size is
 	padded, for checksum calculation. */
 
-	/* FIXME: can't the caller check the page number already? */
-	if (mach_read_from_4(buf + FIL_PAGE_OFFSET) == 0) {
-		return srv_page_size;
+	unsigned t = mach_read_from_2(buf + FIL_PAGE_TYPE);
+
+	if (!(t & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER)) {
+not_compressed:
+		return uint(srv_page_size);
 	}
 
-	const unsigned	ptype = mach_read_from_2(buf + FIL_PAGE_TYPE);
-	ut_ad(ptype & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
+	t &= ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
+	if (t >= 1U << 8) {
+		/* invalid FIL_PAGE_TYPE; no assertion here, because
+		we do not want a crash if buf_page_is_corrupted() is
+		being invoked on a corrupted page */
+		goto not_compressed;
+	}
 
-	ulint total_size = (ptype & ~(1UL << FIL_PAGE_COMPRESS_FCRC32_MARKER));
-	total_size = total_size >> 7;
+	/* FIXME: Always return a multiple of 256, without adding anything! */
+	return t << 8 | FIL_PAGE_COMP_ALGO;
+}
 
-	ut_ad(total_size > 0);
-
-	return ((total_size * 256) + FIL_PAGE_COMP_ALGO);
+/** Check if a page is all zeroes.
+@param[in]	read_buf	database page
+@param[in]	page_size	page frame size
+@return whether the page is all zeroes */
+bool buf_page_is_zeroes(const void* read_buf, size_t page_size)
+{
+	const ulint* b = reinterpret_cast<const ulint*>(read_buf);
+	const ulint* const e = b + page_size / sizeof *b;
+	do {
+		if (*b++) {
+			return false;
+		}
+	} while (b != e);
+	return true;
 }
 
 /** Check if a page is corrupt.
@@ -1001,22 +991,13 @@ buf_page_is_corrupted(
 #ifndef UNIV_INNOCHECKSUM
 	DBUG_EXECUTE_IF("buf_page_import_corrupt_failure", return(true); );
 #endif
-	if (FSP_FLAGS_FCRC32_HAS_MARKER(fsp_flags)) {
-		ulint	size = srv_page_size;
-		bool	is_compressed = fil_space_t::is_compressed(fsp_flags);
-		ulint	page_no = mach_read_from_4(read_buf + FIL_PAGE_OFFSET);
-
-		if (is_compressed && page_no != 0) {
-			size = buf_page_compress_fcrc32_get_size(read_buf);
-		}
-
+	if (fil_space_t::full_crc32(fsp_flags)) {
+		const uint size = buf_page_full_crc32_get_size(read_buf);
 		const byte* end = read_buf + size;
 		uint crc32 = mach_read_from_4(end - FIL_PAGE_FCRC32_CHECKSUM);
 
-		if (!crc32) {
-			const byte* b = read_buf;
-			while (b != end) if (*b++) goto nonzero;
-			/* An all-zero page is not corrupted. */
+		if (!crc32 && size == srv_page_size
+		    && buf_page_is_zeroes(read_buf, size)) {
 			return false;
 		}
 
@@ -1027,24 +1008,17 @@ buf_page_is_corrupted(
 				crc32++;
 			}
 		});
-nonzero:
-		if (is_compressed && page_no != 0) {
-			if (crc32 != buf_calc_compress_page_full_crc32(
-				    read_buf, size)) {
-				return true;
-			}
-		} else {
-			if (!buf_page_is_checksum_valid_full_crc32(
-				    read_buf, crc32)) {
-				return true;
-			}
 
-			if (!mach_read_from_4(
-				    read_buf + FIL_PAGE_FCRC32_KEY_VERSION)
-			    && memcmp(read_buf + (FIL_PAGE_LSN + 4),
-				      end - FIL_PAGE_FCRC32_END_LSN, 4)) {
-				return true;
-			}
+		if (crc32 != buf_calc_compress_page_full_crc32(read_buf,
+							       size)) {
+			return true;
+		}
+		if (size == srv_page_size
+		    && !mach_read_from_4(FIL_PAGE_FCRC32_KEY_VERSION
+					 + read_buf)
+		    && memcmp(read_buf + (FIL_PAGE_LSN + 4),
+			      end - FIL_PAGE_FCRC32_END_LSN, 4)) {
+			return true;
 		}
 
 		buf_page_check_lsn(check_lsn, read_buf);
@@ -7413,9 +7387,8 @@ operator<<(
 @param[in]	src_frame	page to be calculated for full crc32*/
 void buf_page_comp_full_crc32_checksum(byte* src_frame)
 {
-	ulint data_size = buf_page_compress_fcrc32_get_size(src_frame);
-	ulint cksum = buf_calc_compress_page_full_crc32(
-				src_frame, data_size);
+	ulint data_size = buf_page_full_crc32_get_size(src_frame);
+	ulint cksum = buf_calc_compress_page_full_crc32(src_frame, data_size);
 	mach_write_to_4(src_frame + data_size - 4, cksum);
 }
 

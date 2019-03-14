@@ -333,9 +333,9 @@ struct fil_space_t {
 
 		if (full_crc32(flags)) {
 			ulint algo = FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(
-					flags);
-			ut_ad(algo < 7);
-			return (algo > 0);
+				flags);
+			DBUG_ASSERT(algo <= PAGE_ALGORITHM_LAST);
+			return algo > 0;
 		}
 
 		return FSP_FLAGS_HAS_PAGE_COMPRESSION(flags);
@@ -713,8 +713,9 @@ compressed pages. */
 /* @} */
 
 /** File page types (values of FIL_PAGE_TYPE) @{ */
-#define FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED 37401 /*!< Page is compressed and
-						 then encrypted */
+/** page_compressed, encrypted=YES (not used for full_crc32) */
+#define FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED 37401
+/** page_compressed (not used for full_crc32) */
 #define FIL_PAGE_PAGE_COMPRESSED 34354  /*!< page compressed page */
 #define FIL_PAGE_INDEX		17855	/*!< B-tree node */
 #define FIL_PAGE_RTREE		17854	/*!< R-tree node (SPATIAL INDEX) */
@@ -747,7 +748,11 @@ compressed pages. */
 Note: FIL_PAGE_TYPE_INSTANT maps to the same as FIL_PAGE_INDEX. */
 #define FIL_PAGE_TYPE_LAST	FIL_PAGE_TYPE_UNKNOWN
 					/*!< Last page type */
-/** Used to indicate compressed page in full crc32 format. */
+/** Set in FIL_PAGE_TYPE if for full_crc32 pages in page_compressed format.
+If the flag is set, then the following holds for the remaining bits
+of FIL_PAGE_TYPE:
+Bits 0..7 will contain the compressed page size in bytes.
+Bits 8..14 are reserved and must be 0. */
 #define FIL_PAGE_COMPRESS_FCRC32_MARKER	15
 /* @} */
 

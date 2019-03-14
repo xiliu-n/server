@@ -100,8 +100,8 @@ static ulint fil_page_compress_low(
 		{
 			ulong len = uLong(write_size);
 			if (Z_OK == compress2(
-				    out_buf + header_len, &len,
-				    buf, uLong(srv_page_size), comp_level)) {
+				    out_buf + header_len, &len, buf,
+				    uLong(srv_page_size), int(comp_level))) {
 				return len;
 			}
 		}
@@ -228,8 +228,7 @@ static ulint fil_page_compress_for_full_crc32(
 	for full crc32 format. */
 	write_size = (write_size + 1 + 4 + 255) / 256;
 
-	ulint page_type = ((1 << FIL_PAGE_COMPRESS_FCRC32_MARKER)
-			   | write_size << 7);
+	ulint page_type = 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER | write_size;
 	mach_write_to_2(out_buf + FIL_PAGE_TYPE, page_type);
 
 	write_size = write_size * 256;
@@ -437,10 +436,10 @@ ulint fil_page_compress(
 @param[in]	header_len	header length of the page
 @param[in]	actual size	actual size of the page
 @retval true if the page is decompressed or false */
-bool fil_page_decompress_low(
+static bool fil_page_decompress_low(
 	byte*		tmp_buf,
 	byte*		buf,
-	uint64_t	comp_algo,
+	ulint		comp_algo,
 	ulint		header_len,
 	ulint		actual_size)
 {
@@ -459,11 +458,10 @@ bool fil_page_decompress_low(
 		}
 #ifdef HAVE_LZ4
 	case PAGE_LZ4_ALGORITHM:
-		return (LZ4_decompress_safe(
-				reinterpret_cast<const char*>(buf) + header_len,
-					reinterpret_cast<char*>(tmp_buf),
-					actual_size, srv_page_size)
-			== int(srv_page_size));
+		return LZ4_decompress_safe(
+			reinterpret_cast<const char*>(buf) + header_len,
+			reinterpret_cast<char*>(tmp_buf),
+			actual_size, srv_page_size) == int(srv_page_size);
 #endif /* HAVE_LZ4 */
 #ifdef HAVE_LZO
 	case PAGE_LZO_ALGORITHM:
@@ -482,23 +480,23 @@ bool fil_page_decompress_low(
 			size_t		dst_pos = 0;
 			uint64_t 	memlimit = UINT64_MAX;
 
-			return (LZMA_OK == lzma_stream_buffer_decode(
-					&memlimit, 0, NULL, buf + header_len,
-					&src_pos, actual_size, tmp_buf, &dst_pos,
-					srv_page_size)
-				&& dst_pos == srv_page_size);
+			return LZMA_OK == lzma_stream_buffer_decode(
+				&memlimit, 0, NULL, buf + header_len,
+				&src_pos, actual_size, tmp_buf, &dst_pos,
+				srv_page_size)
+				&& dst_pos == srv_page_size;
 		}
 #endif /* HAVE_LZMA */
 #ifdef HAVE_BZIP2
 	case PAGE_BZIP2_ALGORITHM:
 		{
 			unsigned int dst_pos = srv_page_size;
-			return (BZ_OK == BZ2_bzBuffToBuffDecompress(
-					reinterpret_cast<char*>(tmp_buf),
-					&dst_pos,
-					reinterpret_cast<char*>(buf) + header_len,
-					actual_size, 1, 0)
-				&& dst_pos == srv_page_size);
+			return BZ_OK == BZ2_bzBuffToBuffDecompress(
+				reinterpret_cast<char*>(tmp_buf),
+				&dst_pos,
+				reinterpret_cast<char*>(buf) + header_len,
+				actual_size, 1, 0)
+				&& dst_pos == srv_page_size;
 		}
 #endif /* HAVE_BZIP2 */
 #ifdef HAVE_SNAPPY
@@ -506,12 +504,12 @@ bool fil_page_decompress_low(
 		{
 			size_t olen = srv_page_size;
 
-			return (SNAPPY_OK == snappy_uncompress(
-					reinterpret_cast<const char*>(buf)
-						+ header_len,
-					actual_size,
-					reinterpret_cast<char*>(tmp_buf), &olen)
-				&& olen == srv_page_size);
+			return SNAPPY_OK == snappy_uncompress(
+				reinterpret_cast<const char*>(buf)
+				+ header_len,
+				actual_size,
+				reinterpret_cast<char*>(tmp_buf), &olen)
+				&& olen == srv_page_size;
 		}
 #endif /* HAVE_SNAPPY */
 	}
@@ -527,9 +525,9 @@ static ulint fil_page_compress_fcrc32_payload_size(const byte* buf)
 	const uint ptype = mach_read_from_2(buf + FIL_PAGE_TYPE);
 	ut_ad(ptype & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
 
-	uint total_size = (ptype & ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER))
-		>> 7;
+	uint total_size = ptype & ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
 	ut_ad(total_size > 0);
+	ut_ad(total_size < 1U << 8);
 
 	/* FIXME: Only reserve 1 byte for those algorithms that need
 	to know the compressed stream length! */
@@ -563,15 +561,15 @@ ulint fil_page_decompress_for_full_crc32(
 
 	ulint actual_size = fil_page_compress_fcrc32_payload_size(buf);
 	ulint header_len = FIL_PAGE_COMP_ALGO;
-	uint64_t comp_algo = fil_space_t::get_compression_algo(flags);
 
 	/* Check if payload size is corrupted */
 	if (actual_size == 0 || actual_size > srv_page_size - header_len) {
 		return 0;
 	}
 
-	if (!fil_page_decompress_low(tmp_buf, buf, comp_algo, header_len,
-				     actual_size)) {
+	if (!fil_page_decompress_low(tmp_buf, buf,
+				     fil_space_t::get_compression_algo(flags),
+				     header_len, actual_size)) {
 		return 0;
 	}
 
