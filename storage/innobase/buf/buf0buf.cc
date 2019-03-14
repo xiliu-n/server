@@ -937,27 +937,23 @@ static void buf_page_check_lsn(bool check_lsn, const byte* read_buf)
 @return the payload size in the file page */
 uint buf_page_full_crc32_get_size(const byte* buf)
 {
-	/* Note: this is almost the same as
-	fil_page_compress_fcrc32_payload_size, but this size is
-	padded, for checksum calculation. */
-
-	unsigned t = mach_read_from_2(buf + FIL_PAGE_TYPE);
+	uint t = mach_read_from_2(buf + FIL_PAGE_TYPE);
+	uint page_size = uint(srv_page_size);
 
 	if (!(t & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER)) {
-not_compressed:
-		return uint(srv_page_size);
+		return page_size;
 	}
 
 	t &= ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
-	if (t >= 1U << 8) {
-		/* invalid FIL_PAGE_TYPE; no assertion here, because
-		we do not want a crash if buf_page_is_corrupted() is
-		being invoked on a corrupted page */
-		goto not_compressed;
+	t <<= 8;
+	if (t < page_size) {
+		page_size = t;
 	}
 
-	/* FIXME: Always return a multiple of 256, without adding anything! */
-	return t << 8 | FIL_PAGE_COMP_ALGO;
+	/* We do not have any assertion against invalid FIL_PAGE_TYPE,
+	because we do not want a crash if buf_page_is_corrupted() is
+	being invoked on a corrupted page */
+	return page_size;
 }
 
 /** Check if a page is all zeroes.

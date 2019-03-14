@@ -359,6 +359,22 @@ struct fil_space_t {
 	ulint get_compression_algo() const {
 		return fil_space_t::get_compression_algo(flags);
 	}
+	/** Determine if the page_compressed page contains an extra byte
+	for exact compressed stream length
+	@param[in]	flags	tablespace flags
+	@return	whether the extra byte is needed */
+	static bool full_crc32_page_compressed_len(ulint flags)
+	{
+		DBUG_ASSERT(full_crc32(flags));
+		switch (get_compression_algo(flags)) {
+		case PAGE_LZ4_ALGORITHM:
+		case PAGE_LZO_ALGORITHM:
+		case PAGE_SNAPPY_ALGORITHM:
+			return true;
+		}
+		return false;
+	}
+
 	/** Whether the full checksum matches with non full checksum flags.
 	@param[in]	flags		flags present
 	@param[in]	expected	expected flags

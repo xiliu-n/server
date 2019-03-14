@@ -201,73 +201,67 @@ static ulint fil_page_compress_for_full_crc32(
 	ulint		block_size,
 	bool		encrypted)
 {
-	int comp_level = int(fsp_flags_get_page_compression_level(flags));
+	ulint comp_level = fsp_flags_get_page_compression_level(flags);
 
 	if (comp_level == 0) {
-		comp_level = int(page_zip_level);
+		comp_level = page_zip_level;
 	}
 
-	ulint header_len = FIL_PAGE_COMP_ALGO;
-	/* Cache to avoid change during function execution */
-	ulint comp_algo = fil_space_t::get_compression_algo(flags);
+	const ulint header_len = FIL_PAGE_COMP_ALGO;
 
 	ulint write_size = fil_page_compress_low(
-				buf, out_buf,
-				header_len, comp_algo, comp_level);
+		buf, out_buf, header_len,
+		fil_space_t::get_compression_algo(flags), comp_level);
 
 	if (write_size == 0) {
+fail:
 		srv_stats.pages_page_compression_error.inc();
 		return 0;
 	}
 
-	ulint actual_size = write_size;
-	/* Set up the page header */
-	memcpy(out_buf, buf, header_len);
-
+	write_size += header_len;
+	const ulint actual_size = write_size;
 	/* Write the actual length of the data & page type
 	for full crc32 format. */
-	write_size = (write_size + 1 + 4 + 255) / 256;
+	const bool lsb = fil_space_t::full_crc32_page_compressed_len(flags);
+	/* In the MSB, store the rounded-up page size. */
+	write_size = (write_size + lsb + (4 + 255)) & ~255;
+	if (write_size >= srv_page_size) {
+		goto fail;
+	}
 
-	ulint page_type = 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER | write_size;
-	mach_write_to_2(out_buf + FIL_PAGE_TYPE, page_type);
+	/* Set up the page header */
+	memcpy(out_buf, buf, header_len);
+	out_buf[FIL_PAGE_TYPE] = 1U << (FIL_PAGE_COMPRESS_FCRC32_MARKER - 8);
+	out_buf[FIL_PAGE_TYPE + 1] = byte(write_size >> 8);
+	/* Clean up the buffer for the remaining write_size (except checksum) */
+	memset(out_buf + actual_size, 0, write_size - actual_size - 4);
+	if (lsb) {
+		/* Store the LSB */
+		out_buf[write_size - 5] = byte(actual_size + (1 + 4));
+	}
 
-	write_size = write_size * 256;
+	if (!block_size) {
+		block_size = 512;
+	}
 
-	/* Clean up the buffer for the remaining write_size */
-	memset(out_buf + actual_size + header_len, 0, write_size - actual_size);
-
-	memset(out_buf + (header_len + write_size - 5), (actual_size % 256), 1);
+	ut_ad(write_size);
+	if (write_size & (block_size - 1)) {
+		size_t tmp = write_size;
+		write_size = (write_size + (block_size - 1))
+			& ~(block_size - 1);
+		memset(out_buf + tmp, 0, write_size - tmp);
+	}
 
 #ifdef UNIV_DEBUG
 	/* Verify that page can be decompressed */
 	{
 		page_t tmp_buf[UNIV_PAGE_SIZE_MAX];
 		page_t page[UNIV_PAGE_SIZE_MAX];
-		memcpy(page, out_buf, srv_page_size);
+		memcpy(page, out_buf, write_size);
 		ut_ad(fil_page_decompress(tmp_buf, page, flags));
 	}
 #endif
-	write_size += header_len;
-
-	if (block_size <= 0) {
-		block_size = 512;
-	}
-
-	ut_ad(write_size > 0 && block_size > 0);
-
-	/* Actual write needs to be alligned on block size */
-	if (write_size % block_size) {
-		size_t tmp = write_size;
-		write_size =  (size_t)ut_uint64_align_up(
-				(ib_uint64_t)write_size, block_size);
-		/* Clean up the end of buffer */
-		memset(out_buf+tmp, 0, write_size - tmp);
-#ifdef UNIV_DEBUG
-		ut_a(write_size > 0 && ((write_size % block_size) == 0));
-		ut_a(write_size >= tmp);
-#endif
-	}
-
 	srv_stats.page_compression_saved.add(srv_page_size - write_size);
 	srv_stats.pages_page_compressed.inc();
 
@@ -410,6 +404,10 @@ ulint fil_page_compress(
 	ulint		block_size,
 	bool		encrypted)
 {
+	/* The full_crc32 page_compressed format assumes this. */
+	ut_ad(!(block_size & 255));
+	ut_ad(ut_is_2pow(block_size));
+
 	/* Let's not compress file space header or
 	extent descriptor */
 	switch (fil_page_get_type(buf)) {
@@ -517,30 +515,6 @@ static bool fil_page_decompress_low(
 	return false;
 }
 
-/** Get the full_crc32 page_compressed payload size.
-@param[in]	buf	compressed page
-@return compressed payload size in bytes */
-static ulint fil_page_compress_fcrc32_payload_size(const byte* buf)
-{
-	const uint ptype = mach_read_from_2(buf + FIL_PAGE_TYPE);
-	ut_ad(ptype & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
-
-	uint total_size = ptype & ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
-	ut_ad(total_size > 0);
-	ut_ad(total_size < 1U << 8);
-
-	/* FIXME: Only reserve 1 byte for those algorithms that need
-	to know the compressed stream length! */
-	ulint offset = buf[(FIL_PAGE_COMP_ALGO - 4 - 1) + (total_size << 8)];
-
-	/* FIXME: Is this rounding really correct? */
-	if (offset > 256 - 4 - 1) {
-		total_size--;
-	}
-
-	return (total_size - 1) << 8 | offset;
-}
-
 /** Decompress a page for full crc32 format.
 @param[in,out]	tmp_buf	temporary buffer (of innodb_page_size)
 @param[in,out]	buf	possibly compressed page buffer
@@ -548,34 +522,42 @@ static ulint fil_page_compress_fcrc32_payload_size(const byte* buf)
 @return size of the compressed data
 @retval	0		if decompression failed
 @retval	srv_page_size	if the page was not compressed */
-ulint fil_page_decompress_for_full_crc32(
-	byte*	tmp_buf,
-	byte*	buf,
-	ulint	flags)
+ulint fil_page_decompress_for_full_crc32(byte* tmp_buf, byte* buf, ulint flags)
 {
-	ulint page_no = mach_read_from_4(buf + FIL_PAGE_OFFSET);
+	ut_ad(fil_space_t::full_crc32(flags));
 
-	if (!fil_space_t::is_compressed(flags) || page_no == 0) {
-		return srv_page_size;
+	size_t size = buf_page_full_crc32_get_size(buf);
+
+	if (!size || size == srv_page_size) {
+		return size;
 	}
 
-	ulint actual_size = fil_page_compress_fcrc32_payload_size(buf);
-	ulint header_len = FIL_PAGE_COMP_ALGO;
-
-	/* Check if payload size is corrupted */
-	if (actual_size == 0 || actual_size > srv_page_size - header_len) {
+	if (!fil_space_t::is_compressed(flags)) {
 		return 0;
 	}
 
+	if (size >= srv_page_size) {
+		return 0;
+	}
+
+	if (fil_space_t::full_crc32_page_compressed_len(flags)) {
+		if (size_t lsb = buf[size - 5]) {
+			size += lsb - 0x100;
+		}
+		size -= 5;
+	}
+
+	const size_t header_len = FIL_PAGE_COMP_ALGO;
+
 	if (!fil_page_decompress_low(tmp_buf, buf,
 				     fil_space_t::get_compression_algo(flags),
-				     header_len, actual_size)) {
+				     header_len, size - header_len)) {
 		return 0;
 	}
 
 	srv_stats.pages_page_decompressed.inc();
 	memcpy(buf, tmp_buf, srv_page_size);
-	return actual_size;
+	return size;
 }
 
 /** Decompress a page for non full crc32 format.
