@@ -751,9 +751,15 @@ buf_flush_update_zip_checksum(
 @param[in,out]	page	page to be updated */
 void buf_flush_assign_full_crc32_checksum(byte* page)
 {
-	uint32_t checksum = buf_calc_page_full_crc32(page);
-	mach_write_to_4(page + srv_page_size - FIL_PAGE_FCRC32_CHECKSUM,
-			checksum);
+	ut_d(bool compressed = false);
+	ut_d(bool corrupted = false);
+	ut_d(const uint size = buf_page_full_crc32_size(page, &compressed,
+							&corrupted));
+	ut_ad(!compressed);
+	ut_ad(!corrupted);
+	ut_ad(size == uint(srv_page_size));
+	const ulint payload = srv_page_size - FIL_PAGE_FCRC32_CHECKSUM;
+	mach_write_to_4(page + payload, ut_crc32(page, payload));
 }
 
 /** Initialize a page for writing to the tablespace.

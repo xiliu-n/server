@@ -3571,9 +3571,23 @@ not_encrypted:
 			}
 
 			/* Write checksum for the compressed full crc32 page.*/
-			if (full_crc32 && page_compressed && updated) {
-				byte *dest = writeptr + i * size;
-				buf_page_comp_full_crc32_checksum(dest);
+			if (full_crc32 && page_compressed) {
+				ut_ad(updated);
+				byte* dest = writeptr + i * size;
+				ut_d(bool comp = false);
+				ut_d(bool corrupt = false);
+				ulint size = buf_page_full_crc32_size(
+					dest,
+#ifdef UNIV_DEBUG
+					&comp, &corrupt
+#else
+					NULL, NULL
+#endif
+				);
+				ut_ad(!comp == (size == srv_page_size));
+				ut_ad(!corrupt);
+				mach_write_to_4(dest + (size - 4),
+						ut_crc32(dest, size - 4));
 			}
 		}
 

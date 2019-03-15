@@ -636,7 +636,15 @@ static byte* fil_encrypt_buf_for_full_crc32(
 	byte*			dst_frame)
 {
 	uint key_version = fil_crypt_get_latest_key_version(crypt_data);
-	uint size = buf_page_full_crc32_get_size(src_frame);
+	ut_d(bool corrupted = false);
+	const uint size = buf_page_full_crc32_size(src_frame, NULL,
+#ifdef UNIV_DEBUG
+						   &corrupted
+#else
+						   NULL
+#endif
+						   );
+	ut_ad(!corrupted);
 	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 			      + FIL_PAGE_FCRC32_CHECKSUM);
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
@@ -657,10 +665,11 @@ static byte* fil_encrypt_buf_for_full_crc32(
 	ut_a(rc == MY_AES_OK);
 	ut_a(dstlen == srclen);
 
-	/* Clean the rest of the buffer */
-	memset(dst_frame + size, 0, uint(srv_page_size) - size);
-	uint32_t checksum = buf_calc_page_full_crc32(dst_frame);
-	mach_write_to_4(dst_frame + size - FIL_PAGE_FCRC32_CHECKSUM, checksum);
+	const ulint payload = size - FIL_PAGE_FCRC32_CHECKSUM;
+	mach_write_to_4(dst_frame + payload, ut_crc32(dst_frame, payload));
+	/* Clean the rest of the buffer. FIXME: Punch holes when writing! */
+	memset(dst_frame + (payload + 4), 0, srv_page_size - (payload + 4));
+
 	srv_stats.pages_encrypted.inc();
 
 	return dst_frame;
@@ -763,7 +772,11 @@ fil_space_encrypt(
 		byte tmp_mem[UNIV_PAGE_SIZE_MAX];
 
 		if (full_crc32) {
-			uint size = buf_page_full_crc32_get_size(tmp);
+			bool compressed = false, corrupted = false;
+			uint size = buf_page_full_crc32_size(
+				tmp, &compressed, &corrupted);
+			ut_ad(!corrupted);
+			ut_ad(!compressed == (size == srv_page_size));
 			ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
 						size, space->flags, tmp,
 						&err));
@@ -844,7 +857,13 @@ static bool fil_space_decrypt_full_crc32(
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	byte* dst = tmp_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	uint dstlen = 0;
-	uint size = buf_page_full_crc32_get_size(src_frame);
+	bool corrupted = false;
+	uint size = buf_page_full_crc32_size(src_frame, NULL, &corrupted);
+	if (UNIV_UNLIKELY(corrupted)) {
+fail:
+		*err = DB_DECRYPTION_FAILED;
+		return false;
+	}
 
 	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 			      + FIL_PAGE_FCRC32_CHECKSUM);
@@ -855,8 +874,7 @@ static bool fil_space_decrypt_full_crc32(
 
 	if (rc != MY_AES_OK || dstlen != srclen) {
 		if (rc == -1) {
-			*err = DB_DECRYPTION_FAILED;
-			return false;
+			goto fail;
 		}
 
 		ib::fatal() << "Unable to decrypt data-block "

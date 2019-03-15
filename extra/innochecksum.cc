@@ -613,8 +613,10 @@ static bool update_checksum(byte* page, ulint flags)
 		}
 
 	} else if (use_full_crc32) {
-		checksum = buf_calc_page_full_crc32(page);
-		byte* c = page + physical_page_size - FIL_PAGE_FCRC32_CHECKSUM;
+		ulint payload = buf_page_full_crc32_size(page, NULL, NULL)
+			- FIL_PAGE_FCRC32_CHECKSUM;
+		checksum = ut_crc32(page, payload);
+		byte* c = page + payload;
 		if (mach_read_from_4(c) == checksum) return false;
 		mach_write_to_4(c, checksum);
 		if (is_log_enabled) {

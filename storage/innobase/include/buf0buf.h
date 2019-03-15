@@ -760,6 +760,35 @@ inline bool buf_page_is_compressed(const byte* read_buf, ulint fsp_flags)
 		: page_type == FIL_PAGE_PAGE_COMPRESSED;
 }
 
+/** Get the compressed or uncompressed size of a full_crc32 page.
+@param[in]	buf	page_compressed or uncompressed page
+@param[out]	comp	whether the page could be compressed
+@param[out]	cr	whether the page could be corrupted
+@return the payload size in the file page */
+inline uint buf_page_full_crc32_size(const byte* buf, bool* comp, bool* cr)
+{
+	uint t = mach_read_from_2(buf + FIL_PAGE_TYPE);
+	uint page_size = uint(srv_page_size);
+
+	if (!(t & 1U << FIL_PAGE_COMPRESS_FCRC32_MARKER)) {
+		return page_size;
+	}
+
+	t &= ~(1U << FIL_PAGE_COMPRESS_FCRC32_MARKER);
+	t <<= 8;
+
+	if (t < page_size) {
+		page_size = t;
+		if (comp) {
+			*comp = true;
+		}
+	} else if (cr) {
+		*cr = true;
+	}
+
+	return page_size;
+}
+
 #ifndef UNIV_INNOCHECKSUM
 /**********************************************************************//**
 Gets the space id, page offset, and byte offset within page of a
@@ -1422,10 +1451,6 @@ buf_flush_update_zip_checksum(
 	ulint		size,
 	lsn_t		lsn);
 
-/** Write the full crc32 checksum value for the compressed page.
-@param[in]	src_frame	page to be calculated for full crc32*/
-void buf_page_comp_full_crc32_checksum(byte* src_frame);
-
 /** Encryption and page_compression hook that is called just before
 a page is written to disk.
 @param[in,out]	space		tablespace
@@ -1439,11 +1464,6 @@ buf_page_encrypt(
 	fil_space_t*	space,
 	buf_page_t*	bpage,
 	byte*		src_frame);
-
-/** Get the compressed or uncompressed size of a full_crc32 page.
-@param[in]	buf	compressed page
-@return the payload size in the file page */
-uint buf_page_full_crc32_get_size(const byte* buf);
 
 /** @brief The temporary memory structure.
 

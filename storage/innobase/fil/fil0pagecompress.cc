@@ -525,10 +525,10 @@ static bool fil_page_decompress_low(
 ulint fil_page_decompress_for_full_crc32(byte* tmp_buf, byte* buf, ulint flags)
 {
 	ut_ad(fil_space_t::full_crc32(flags));
-
-	size_t size = buf_page_full_crc32_get_size(buf);
-
-	if (!size || size == srv_page_size) {
+	bool compressed = false;
+	size_t size = buf_page_full_crc32_size(buf, &compressed, NULL);
+	if (!compressed) {
+		ut_ad(size == srv_page_size);
 		return size;
 	}
 
@@ -541,6 +541,7 @@ ulint fil_page_decompress_for_full_crc32(byte* tmp_buf, byte* buf, ulint flags)
 	}
 
 	if (fil_space_t::full_crc32_page_compressed_len(flags)) {
+		compile_time_assert(FIL_PAGE_FCRC32_CHECKSUM == 4);
 		if (size_t lsb = buf[size - 5]) {
 			size += lsb - 0x100;
 		}
