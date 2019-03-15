@@ -10254,10 +10254,14 @@ commit_cache_norebuild(
 			space->flags &= ~FSP_FLAGS_MASK_MEM_COMPRESSION_LEVEL;
 			space->flags |= ctx->page_compression_level
 				<< FSP_FLAGS_MEM_COMPRESSION_LEVEL;
-			space->flags |= space->full_crc32()
-				? innodb_compression_algorithm
-				<< FSP_FLAGS_FCRC32_POS_COMPRESSED_ALGO
-				: FSP_FLAGS_MASK_PAGE_COMPRESSION;
+			if (!space->full_crc32()) {
+				space->flags
+					|= FSP_FLAGS_MASK_PAGE_COMPRESSION;
+			} else if (!space->is_compressed()) {
+				space->flags
+					|= innodb_compression_algorithm
+					<< FSP_FLAGS_FCRC32_POS_COMPRESSED_ALGO;
+			}
 			mutex_exit(&fil_system.mutex);
 
 			if (update) {
