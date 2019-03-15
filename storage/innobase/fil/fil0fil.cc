@@ -557,6 +557,8 @@ bool fil_node_t::read_page0(bool first)
 		flags = cflags;
 	}
 
+	ut_ad(!(flags & FSP_FLAGS_MEM_MASK));
+
 	/* Try to read crypt_data from page 0 if it is not yet read. */
 	if (!space->crypt_data) {
 		space->crypt_data = fil_space_read_crypt_data(
@@ -588,17 +590,7 @@ bool fil_node_t::read_page0(bool first)
 			size_bytes &= ~os_offset_t(mask);
 		}
 
-		if (space->full_crc32() != fil_space_t::full_crc32(flags)
-		    && fil_space_t::is_flags_equal(flags, space->flags)) {
-			space->flags = flags;
-		}
-
-		if (fil_space_t::full_crc32(space->flags)
-		    && fil_space_t::full_crc32(flags)
-		    && (fil_space_t::get_compression_algo(flags)
-		        != fil_space_t::get_compression_algo(space->flags))) {
-			space->flags = flags;
-		}
+		space->flags = (space->flags & FSP_FLAGS_MEM_MASK) | flags;
 
 		this->size = ulint(size_bytes / psize);
 		space->size += this->size;
@@ -3936,7 +3928,7 @@ void fsp_flags_try_adjust(fil_space_t* space, ulint flags)
 {
 	ut_ad(!srv_read_only_mode);
 	ut_ad(fil_space_t::is_valid_flags(flags, space->id));
-	if (space->full_crc32()) {
+	if (space->full_crc32() || fil_space_t::full_crc32(flags)) {
 		return;
 	}
 	if (!space->size && (space->purpose != FIL_TYPE_TABLESPACE
