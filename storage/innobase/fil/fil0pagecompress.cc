@@ -572,17 +572,19 @@ ulint fil_page_decompress_for_non_full_crc32(
 {
 	const unsigned	ptype = mach_read_from_2(buf+FIL_PAGE_TYPE);
 	ulint header_len;
-	uint64_t comp_algo;
+	uint comp_algo;
 	switch (ptype) {
 	case FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED:
-		header_len = (FIL_PAGE_DATA
-			      + FIL_PAGE_ENCRYPT_COMP_METADATA_LEN);
+		header_len= FIL_PAGE_DATA + FIL_PAGE_ENCRYPT_COMP_METADATA_LEN;
 		comp_algo = mach_read_from_2(
 			FIL_PAGE_DATA + FIL_PAGE_ENCRYPT_COMP_ALGO + buf);
 		break;
 	case FIL_PAGE_PAGE_COMPRESSED:
 		header_len = FIL_PAGE_DATA + FIL_PAGE_COMP_METADATA_LEN;
-		comp_algo = mach_read_from_8(FIL_PAGE_COMP_ALGO + buf);
+		if (mach_read_from_6(FIL_PAGE_COMP_ALGO + buf)) {
+			return 0;
+		}
+		comp_algo = mach_read_from_2(FIL_PAGE_COMP_ALGO + 6 + buf);
 		break;
 	default:
 		return srv_page_size;
