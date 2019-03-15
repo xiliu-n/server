@@ -348,11 +348,9 @@ struct fil_space_t {
 	@return algorithm type of tablespace */
 	static ulint get_compression_algo(ulint flags)
 	{
-		if (full_crc32(flags)) {
-			return FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(flags);
-		}
-
-		return 0;
+		return full_crc32(flags)
+			? FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(flags)
+			: 0;
 	}
 	/** @return the page_compressed algorithm
 	@retval 0 if not page_compressed */
@@ -384,19 +382,22 @@ struct fil_space_t {
 		ut_ad(full_crc32(flags));
 
 		if (full_crc32(expected)) {
-			return (get_compression_algo(flags)
-				== get_compression_algo(expected));
+			return get_compression_algo(flags)
+				== get_compression_algo(expected);
 		}
 
 		ulint page_ssize = FSP_FLAGS_FCRC32_GET_PAGE_SSIZE(flags);
 		ulint space_page_ssize = FSP_FLAGS_GET_PAGE_SSIZE(expected);
 
-		if ((page_ssize == 5 && space_page_ssize != 0)
-		    || (page_ssize != 5 && (space_page_ssize != page_ssize))) {
+		if (page_ssize == 5) {
+			if (space_page_ssize) {
+				return false;
+			}
+		} else if (space_page_ssize != page_ssize) {
 			return false;
 		}
 
-		return (is_compressed(expected) == is_compressed(flags));
+		return is_compressed(expected) == is_compressed(flags);
 	}
 	/** Whether old tablespace flags match full_crc32 flags.
 	@param[in]	flags		flags present
@@ -414,12 +415,15 @@ struct fil_space_t {
 		ulint space_page_ssize = FSP_FLAGS_FCRC32_GET_PAGE_SSIZE(
 			expected);
 
-		if ((page_ssize == 0 && space_page_ssize != 5)
-		    || (page_ssize != 0 && (space_page_ssize != page_ssize))) {
+		if (page_ssize) {
+			if (space_page_ssize != 5) {
+				return false;
+			}
+		} else if (space_page_ssize != page_ssize) {
 			return false;
 		}
 
-		return (is_compressed(flags) == is_compressed(expected));
+		return is_compressed(expected) == is_compressed(flags);
 	}
 	/** Whether both fsp flags are equivalent */
 	static bool is_flags_equal(ulint flags, ulint expected)
