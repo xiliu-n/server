@@ -10251,23 +10251,13 @@ commit_cache_norebuild(
 			bool update = !(space->flags
 					& FSP_FLAGS_MASK_PAGE_COMPRESSION);
 			mutex_enter(&fil_system.mutex);
-
-			if (space->full_crc32()) {
-				space->flags |=
-					 (innodb_compression_algorithm
-					  << FSP_FLAGS_FCRC32_POS_COMPRESSED_ALGO)
-					 | (ctx->page_compression_level
-					    << FSP_FLAGS_MEM_COMPRESSION_LEVEL);
-					 
-			} else {
-				space->flags =
-					(~FSP_FLAGS_MASK_MEM_COMPRESSION_LEVEL
-					 & (space->flags
-					    | FSP_FLAGS_MASK_PAGE_COMPRESSION))
-					| (ctx->page_compression_level
-					   << FSP_FLAGS_MEM_COMPRESSION_LEVEL);
-			}
-
+			space->flags &= ~FSP_FLAGS_MASK_MEM_COMPRESSION_LEVEL;
+			space->flags |= ctx->page_compression_level
+				<< FSP_FLAGS_MEM_COMPRESSION_LEVEL;
+			space->flags |= space->full_crc32()
+				? innodb_compression_algorithm
+				<< FSP_FLAGS_FCRC32_POS_COMPRESSED_ALGO
+				: FSP_FLAGS_MASK_PAGE_COMPRESSION;
 			mutex_exit(&fil_system.mutex);
 
 			if (update) {
