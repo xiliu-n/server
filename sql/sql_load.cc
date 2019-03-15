@@ -41,6 +41,7 @@
 #include "sql_trigger.h"
 #include "sql_derived.h"
 #include "sql_show.h"
+#include "debug_sync.h"
 
 extern "C" int _my_b_net_read(IO_CACHE *info, uchar *Buffer, size_t Count);
 
@@ -119,20 +120,42 @@ static bool wsrep_load_data_split(THD *thd, const TABLE *table,
     if (hton->db_type != DB_TYPE_INNODB)
       DBUG_RETURN(false);
     WSREP_DEBUG("intermediate transaction commit in LOAD DATA");
+    wsrep_set_load_multi_commit(thd, true);
     if (wsrep_run_wsrep_commit(thd, true) != WSREP_TRX_OK) DBUG_RETURN(true);
     if (binlog_hton->commit(binlog_hton, thd, true)) DBUG_RETURN(true);
     wsrep_post_commit(thd, true);
     hton->commit(hton, thd, true);
+    wsrep_set_load_multi_commit(thd, false);
+    DEBUG_SYNC(thd, "intermediate_transaction_commit");
     table->file->extra(HA_EXTRA_FAKE_START_STMT);
   }
 
   DBUG_RETURN(false);
 }
-# define WSREP_LOAD_DATA_SPLIT(thd,table,info)		\
-  if (wsrep_load_data_split(thd,table,info)) DBUG_RETURN(1)
+/*
+  If the commit fails, then an early return from
+  the function occurs there and therefore we need
+  to reset the table->auto_increment_field_not_null
+  flag, which is usually reset after calling
+  the write_record():
+*/
+#define WSREP_LOAD_DATA_SPLIT(thd,table,info)		\
+  if (wsrep_load_data_split(thd,table,info))		\
+  {							\
+    table->auto_increment_field_not_null= FALSE;	\
+    DBUG_RETURN(1);					\
+  }
 #else /* WITH_WSREP */
 #define WSREP_LOAD_DATA_SPLIT(thd,table,info) /* empty */
 #endif /* WITH_WSREP */
+
+#define WRITE_RECORD(thd,table,info)			\
+  do {							\
+    int err_= write_record(thd, table, &info);		\
+    table->auto_increment_field_not_null= FALSE;	\
+    if (err_)						\
+      DBUG_RETURN(1);					\
+  } while (0)
 
 class READ_INFO: public Load_data_param
 {
@@ -1003,11 +1026,8 @@ read_fixed_length(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
     }
 
     WSREP_LOAD_DATA_SPLIT(thd, table, info);
-    err= write_record(thd, table, &info);
-    table->auto_increment_field_not_null= FALSE;
-    if (err)
-      DBUG_RETURN(1);
-   
+    WRITE_RECORD(thd, table, info);
+
     /*
       We don't need to reset auto-increment field since we are restoring
       its default value at the beginning of each loop iteration.
@@ -1040,7 +1060,7 @@ read_sep_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
   Item *item;
   TABLE *table= table_list->table;
   uint enclosed_length;
-  bool err, progress_reports;
+  bool progress_reports;
   ulonglong counter, time_to_report_progress;
   DBUG_ENTER("read_sep_field");
 
@@ -1146,10 +1166,8 @@ read_sep_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
     }
 
     WSREP_LOAD_DATA_SPLIT(thd, table, info);
-    err= write_record(thd, table, &info);
-    table->auto_increment_field_not_null= FALSE;
-    if (err)
-      DBUG_RETURN(1);
+    WRITE_RECORD(thd, table, info);
+
     /*
       We don't need to reset auto-increment field since we are restoring
       its default value at the beginning of each loop iteration.
@@ -1273,7 +1291,7 @@ read_xml_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
     table->auto_increment_field_not_null= false;
     if (err)
       DBUG_RETURN(1);
-    
+
     /*
       We don't need to reset auto-increment field since we are restoring
       its default value at the beginning of each loop iteration.
@@ -1314,7 +1332,7 @@ READ_INFO::unescape(char chr)
 
 
 READ_INFO::READ_INFO(THD *thd, File file_par,
-                     const Load_data_param &param,
+		     const Load_data_param &param,
 		     String &field_term, String &line_start, String &line_term,
 		     String &enclosed_par, int escape, bool get_it_from_net,
 		     bool is_fifo)

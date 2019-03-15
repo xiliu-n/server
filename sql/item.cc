@@ -2643,7 +2643,6 @@ void Item_field::reset_field(Field *f)
   name= (char*) f->field_name;
 }
 
-
 void Item_field::load_data_print_for_log_event(THD *thd, String *to) const
 {
   append_identifier(thd, to, name, (uint) strlen(name));

@@ -678,6 +678,15 @@ bool wsrep_thd_has_explicit_locks(THD *thd)
   return thd->mdl_context.has_explicit_locks();
 }
 
+void wsrep_set_load_multi_commit(THD *thd, bool split)
+{
+   thd->wsrep_split_flag= split;
+}
+
+bool wsrep_is_load_multi_commit(THD *thd)
+{
+   return thd->wsrep_split_flag;
+}
 /*
   Get auto increment variables for THD. Use global settings for
   applier threads.
