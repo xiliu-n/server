@@ -543,8 +543,8 @@ bool fil_node_t::read_page0(bool first)
 					    + page);
 	if (!fil_space_t::is_valid_flags(flags, space->id)) {
 		ulint cflags = fsp_flags_convert_from_101(flags);
-		if (cflags == ULINT_UNDEFINED
-		    || (cflags ^ space->flags) & ~FSP_FLAGS_MEM_MASK) {
+		if (cflags == ULINT_UNDEFINED) {
+invalid:
 			ib::error()
 				<< "Expected tablespace flags "
 				<< ib::hex(space->flags)
@@ -552,6 +552,14 @@ bool fil_node_t::read_page0(bool first)
 				<< " in the file " << name;
 			ut_free(buf2);
 			return false;
+		}
+
+		ulint cf = cflags & ~FSP_FLAGS_MEM_MASK;
+		ulint sf = space->flags & ~FSP_FLAGS_MEM_MASK;
+
+		if (!fil_space_t::is_flags_equal(cf, sf)
+		    && !fil_space_t::is_flags_equal(sf, cf)) {
+			goto invalid;
 		}
 
 		flags = cflags;
@@ -3991,8 +3999,8 @@ fil_space_for_table_exists_in_mem(
 		ulint tf = expected_flags & ~FSP_FLAGS_MEM_MASK;
 		ulint sf = space->flags & ~FSP_FLAGS_MEM_MASK;
 
-		if (!(fil_space_t::is_flags_equal(tf, sf)
-		      || fil_space_t::is_flags_equal(sf, tf))) {
+		if (!fil_space_t::is_flags_equal(tf, sf)
+		    && !fil_space_t::is_flags_equal(sf, tf)) {
 			goto func_exit;
 		}
 
@@ -4008,7 +4016,8 @@ fil_space_for_table_exists_in_mem(
 
 		/* Adjust the flags that are in FSP_FLAGS_MEM_MASK.
 		FSP_SPACE_FLAGS will not be written back here. */
-		space->flags |= (expected_flags & FSP_FLAGS_MEM_MASK);
+		space->flags = (space->flags & ~FSP_FLAGS_MEM_MASK)
+			| (expected_flags & FSP_FLAGS_MEM_MASK);
 		mutex_exit(&fil_system.mutex);
 		if (!srv_read_only_mode) {
 			fsp_flags_try_adjust(space, expected_flags
