@@ -3988,7 +3988,11 @@ fil_space_for_table_exists_in_mem(
 
 	mutex_enter(&fil_system.mutex);
 	if (fil_space_t* space = fil_space_get_by_id(id)) {
-		if ((space->flags ^ expected_flags) & ~FSP_FLAGS_MEM_MASK) {
+		ulint tf = expected_flags & ~FSP_FLAGS_MEM_MASK;
+		ulint sf = space->flags & ~FSP_FLAGS_MEM_MASK;
+
+		if (!(fil_space_t::is_flags_equal(tf, sf)
+		      || fil_space_t::is_flags_equal(sf, tf))) {
 			goto func_exit;
 		}
 
@@ -4004,7 +4008,7 @@ fil_space_for_table_exists_in_mem(
 
 		/* Adjust the flags that are in FSP_FLAGS_MEM_MASK.
 		FSP_SPACE_FLAGS will not be written back here. */
-		space->flags = expected_flags;
+		space->flags |= (expected_flags & FSP_FLAGS_MEM_MASK);
 		mutex_exit(&fil_system.mutex);
 		if (!srv_read_only_mode) {
 			fsp_flags_try_adjust(space, expected_flags
