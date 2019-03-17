@@ -8824,7 +8824,6 @@ bool Field_geom::load_data_set_null(THD *thd)
   return false;
 }
 
-
 #endif /*HAVE_SPATIAL*/
 
 /****************************************************************************

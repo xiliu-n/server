@@ -1329,7 +1329,7 @@ READ_INFO::unescape(char chr)
 
 
 READ_INFO::READ_INFO(THD *thd, File file_par,
-                     const Load_data_param &param,
+		     const Load_data_param &param,
 		     String &field_term, String &line_start, String &line_term,
 		     String &enclosed_par, int escape, bool get_it_from_net,
 		     bool is_fifo)
