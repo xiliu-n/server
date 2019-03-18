@@ -18,6 +18,7 @@ BEGIN
         SET SESSION wsrep_sync_wait = 0;
         WHILE 1 DO
                 UPDATE t1 SET f2 = LEFT(MD5(RAND()), 4);
+		DO SLEEP(0.1);
         END WHILE;
 END|
 
