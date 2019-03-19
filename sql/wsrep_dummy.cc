@@ -80,12 +80,6 @@ bool wsrep_thd_ignore_table(THD *)
 long long wsrep_thd_trx_seqno(const THD *)
 { return -1; }
 
-void wsrep_set_load_multi_commit(MYSQL_THD, bool)
-{ }
-
-bool wsrep_is_load_multi_commit(MYSQL_THD)
-{ return false; }
-
 my_bool wsrep_thd_is_aborting(const THD *)
 { return 0; }
 
@@ -141,6 +135,3 @@ my_bool wsrep_get_debug()
 
 void wsrep_commit_ordered(THD* )
 { }
-
-my_bool wsrep_thd_is_applier(MYSQL_THD)
-{ return false; }

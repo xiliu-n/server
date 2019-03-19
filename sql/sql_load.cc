@@ -41,7 +41,6 @@
 #include "sql_trigger.h"
 #include "sql_derived.h"
 #include "sql_show.h"
-#include "debug_sync.h"
 
 #include "wsrep_mysqld.h"
 
@@ -112,35 +111,12 @@ public:
     , m_fragment_unit(thd->wsrep_trx().streaming_context().fragment_unit())
     , m_fragment_size(thd->wsrep_trx().streaming_context().fragment_size())
   {
-<<<<<<< HEAD
     if (WSREP(m_thd) && m_load_data_splitting)
     {
       /* Override streaming settings with backward compatible values for
          load data splitting */
       m_thd->wsrep_cs().streaming_params(wsrep::streaming_context::row, 10000);
     }
-||||||| merged common ancestors
-    if (hton->db_type != DB_TYPE_INNODB)
-      DBUG_RETURN(false);
-    WSREP_DEBUG("intermediate transaction commit in LOAD DATA");
-    if (wsrep_run_wsrep_commit(thd, true) != WSREP_TRX_OK) DBUG_RETURN(true);
-    if (binlog_hton->commit(binlog_hton, thd, true)) DBUG_RETURN(true);
-    wsrep_post_commit(thd, true);
-    hton->commit(hton, thd, true);
-    table->file->extra(HA_EXTRA_FAKE_START_STMT);
-=======
-    if (hton->db_type != DB_TYPE_INNODB)
-      DBUG_RETURN(false);
-    WSREP_DEBUG("intermediate transaction commit in LOAD DATA");
-    wsrep_set_load_multi_commit(thd, true);
-    if (wsrep_run_wsrep_commit(thd, true) != WSREP_TRX_OK) DBUG_RETURN(true);
-    if (binlog_hton->commit(binlog_hton, thd, true)) DBUG_RETURN(true);
-    wsrep_post_commit(thd, true);
-    hton->commit(hton, thd, true);
-    wsrep_set_load_multi_commit(thd, false);
-    DEBUG_SYNC(thd, "intermediate_transaction_commit");
-    table->file->extra(HA_EXTRA_FAKE_START_STMT);
->>>>>>> origin/10.3
   }
 
   ~Wsrep_load_data_split()
@@ -158,15 +134,6 @@ private:
   size_t m_fragment_size;
 };
 #endif /* WITH_WSREP */
-
-// FIXME: Remove this, and extend ~Wsrep_load_data_split()
-#define WRITE_RECORD(thd,table,info)			\
-  do {							\
-    int err_= write_record(thd, table, &info);		\
-    table->auto_increment_field_not_null= FALSE;	\
-    if (err_)						\
-      DBUG_RETURN(1);					\
-  } while (0)
 
 class READ_INFO: public Load_data_param
 {
@@ -954,7 +921,7 @@ read_fixed_length(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
   List_iterator_fast<Item> it(fields_vars);
   Item *item;
   TABLE *table= table_list->table;
-  bool progress_reports;
+  bool err, progress_reports;
   ulonglong counter, time_to_report_progress;
   DBUG_ENTER("read_fixed_length");
 
@@ -1045,8 +1012,11 @@ read_fixed_length(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
       DBUG_RETURN(-1);
     }
 
-    WRITE_RECORD(thd, table, info);
-
+    err= write_record(thd, table, &info);
+    table->auto_increment_field_not_null= FALSE;
+    if (err)
+      DBUG_RETURN(1);
+   
     /*
       We don't need to reset auto-increment field since we are restoring
       its default value at the beginning of each loop iteration.
@@ -1079,7 +1049,7 @@ read_sep_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
   Item *item;
   TABLE *table= table_list->table;
   uint enclosed_length;
-  bool progress_reports;
+  bool err, progress_reports;
   ulonglong counter, time_to_report_progress;
   DBUG_ENTER("read_sep_field");
 
@@ -1184,8 +1154,10 @@ read_sep_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
       DBUG_RETURN(-1);
     }
 
-    WRITE_RECORD(thd, table, info);
-
+    err= write_record(thd, table, &info);
+    table->auto_increment_field_not_null= FALSE;
+    if (err)
+      DBUG_RETURN(1);
     /*
       We don't need to reset auto-increment field since we are restoring
       its default value at the beginning of each loop iteration.
@@ -1229,6 +1201,7 @@ read_xml_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
   
   for ( ; ; it.rewind())
   {
+    bool err;
     if (thd->killed)
     {
       thd->send_kill_message();
@@ -1302,9 +1275,12 @@ read_xml_field(THD *thd, COPY_INFO &info, TABLE_LIST *table_list,
     case VIEW_CHECK_ERROR:
       DBUG_RETURN(-1);
     }
-
-    WRITE_RECORD(thd, table, info);
-
+    
+    err= write_record(thd, table, &info);
+    table->auto_increment_field_not_null= false;
+    if (err)
+      DBUG_RETURN(1);
+    
     /*
       We don't need to reset auto-increment field since we are restoring
       its default value at the beginning of each loop iteration.

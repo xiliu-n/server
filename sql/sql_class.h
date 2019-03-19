@@ -4935,14 +4935,6 @@ public:
   Wsrep_applier_service* wsrep_applier_service;
   /* wait_for_commit struct for binlog group commit */
   wait_for_commit wsrep_wfc;
-  /* This flag is set when innodb do an intermediate commit to
-  processing the LOAD DATA INFILE statement by splitting it into 10K
-  rows chunks. If flag is set, then binlog rotation is not performed
-  while intermediate transaction try to commit, because in this case
-  rotation causes unregistration of innodb handler. Later innodb handler
-  registered again, but replication of last chunk of rows is skipped
-  by the innodb engine: */
-  bool                      wsrep_split_flag;
 #endif /* WITH_WSREP */
 
   /* Handling of timeouts for commands */
