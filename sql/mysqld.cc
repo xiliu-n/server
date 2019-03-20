@@ -7596,7 +7596,7 @@ mysqld_get_one_option(int optid,
     val= p--;
     while (my_isspace(mysqld_charset, *p) && p > argument)
       *p-- = 0;
-    if (p == argument)
+    if (p == argument && my_isspace(mysqld_charset, *p)) /* Db name can be one char also */
     {
       sql_print_error("Bad syntax in replicate-rewrite-db - empty FROM db!\n");
       return 1;
