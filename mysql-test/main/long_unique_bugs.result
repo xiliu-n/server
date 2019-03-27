@@ -239,3 +239,49 @@ CREATE TABLE t1 (a INT, UNIQUE USING HASH (a)) PARTITION BY HASH (a) PARTITIONS 
 INSERT INTO t1 VALUES (2);
 REPLACE INTO t1 VALUES (2);
 DROP TABLE t1;
+CREATE TABLE t1 (pk INT, a CHAR(4), b BLOB NOT NULL, PRIMARY KEY(pk));
+INSERT INTO t1 VALUES (1,'foo','bar');
+ALTER TABLE t1 ADD KEY (b(64));
+ALTER TABLE t1 ADD UNIQUE (b(165));
+ALTER TABLE t1 ADD KEY (b(1000));
+ALTER TABLE t1 ADD KEY (b(500));
+ALTER TABLE t1 ADD UNIQUE (a,b);
+ALTER TABLE t1 ADD UNIQUE (b(95));
+ALTER TABLE t1 ADD KEY (b(30));
+ALTER TABLE t1 ADD UNIQUE (b(20));
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `pk` int(11) NOT NULL,
+  `a` char(4) DEFAULT NULL,
+  `b` blob NOT NULL,
+  PRIMARY KEY (`pk`),
+  UNIQUE KEY `b_2` (`b`(165)),
+  UNIQUE KEY `b_5` (`b`(95)),
+  UNIQUE KEY `b_7` (`b`(20)),
+  UNIQUE KEY `a` (`a`,`b`) USING HASH,
+  KEY `b` (`b`(64)),
+  KEY `b_3` (`b`(1000)),
+  KEY `b_4` (`b`(500)),
+  KEY `b_6` (`b`(30))
+) ENGINE=MyISAM DEFAULT CHARSET=latin1
+ALTER TABLE t1 ADD UNIQUE (b);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `pk` int(11) NOT NULL,
+  `a` char(4) DEFAULT NULL,
+  `b` blob NOT NULL,
+  PRIMARY KEY (`pk`),
+  UNIQUE KEY `b_2` (`b`(165)),
+  UNIQUE KEY `b_5` (`b`(95)),
+  UNIQUE KEY `b_7` (`b`(20)),
+  UNIQUE KEY `a` (`a`,`b`) USING HASH,
+  UNIQUE KEY `b_8` (`b`) USING HASH,
+  KEY `b` (`b`(64)),
+  KEY `b_3` (`b`(1000)),
+  KEY `b_4` (`b`(500)),
+  KEY `b_6` (`b`(30))
+) ENGINE=MyISAM DEFAULT CHARSET=latin1
+ALTER TABLE t1 FORCE;
+DROP TABLE t1;

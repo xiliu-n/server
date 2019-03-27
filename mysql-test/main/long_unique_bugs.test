@@ -1,4 +1,5 @@
 --source include/have_innodb.inc
+--source include/have_partition.inc
 
 #
 # MDEV-18707 Server crash in my_hash_sort_bin, ASAN heap-use-after-free in Field::is_null, server hang, corrupted double-linked list
@@ -269,8 +270,27 @@ drop table t1;
 #
 # MDEV-18904 Assertion `m_part_spec.start_part >= m_part_spec.end_part' failed in ha_partition::index_read_idx_map
 #
---source include/have_partition.inc
 CREATE TABLE t1 (a INT, UNIQUE USING HASH (a)) PARTITION BY HASH (a) PARTITIONS 2;
 INSERT INTO t1 VALUES (2);
 REPLACE INTO t1 VALUES (2);
+DROP TABLE t1;
+
+#
+# MDEV-19049 Server crashes in check_duplicate_long_entry_key, ASAN stack-buffer-overflow in Field_blob::get_key_image
+#
+CREATE TABLE t1 (pk INT, a CHAR(4), b BLOB NOT NULL, PRIMARY KEY(pk));
+INSERT INTO t1 VALUES (1,'foo','bar');
+
+ALTER TABLE t1 ADD KEY (b(64));
+ALTER TABLE t1 ADD UNIQUE (b(165));
+ALTER TABLE t1 ADD KEY (b(1000));
+ALTER TABLE t1 ADD KEY (b(500));
+ALTER TABLE t1 ADD UNIQUE (a,b);
+ALTER TABLE t1 ADD UNIQUE (b(95));
+ALTER TABLE t1 ADD KEY (b(30));
+ALTER TABLE t1 ADD UNIQUE (b(20));
+show create table t1;
+ALTER TABLE t1 ADD UNIQUE (b);
+show create table t1;
+ALTER TABLE t1 FORCE;
 DROP TABLE t1;
