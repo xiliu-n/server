@@ -64,17 +64,6 @@ typedef std::set<
 	std::less<table_id_t>,
 	ut_allocator<table_id_t> >	table_id_set;
 
-/** Set flush observer for the transaction
-@param[in/out]	trx		transaction struct
-@param[in]	observer	flush observer */
-void
-trx_set_flush_observer(
-	trx_t*		trx,
-	FlushObserver*	observer)
-{
-	trx->flush_observer = observer;
-}
-
 /*************************************************************//**
 Set detailed error message for the transaction. */
 void
@@ -165,7 +154,7 @@ trx_init(
 
 	trx->lock.table_cached = 0;
 
-	trx->flush_observer = NULL;
+	ut_ad(trx->get_flush_observer() == NULL);
 }
 
 /** For managing the life-cycle of the trx_t instance that we get
@@ -1086,6 +1075,21 @@ static trx_rseg_t* trx_assign_rseg_low()
 	ut_ad(rseg->trx_ref_count > 0);
 	ut_ad(rseg->is_persistent());
 	return(rseg);
+}
+
+/** Set the flush observer for the trx
+@param[in]	space_id	tablespace id
+@param[in]	stage		phase during inplace alter */
+void trx_t::set_flush_observer(ulint space_id, ut_stage_alter_t* stage)
+{
+	flush_observer = UT_NEW_NOKEY(FlushObserver(space_id, this, stage));
+}
+
+/** Remove the flush observer for the trx. */
+void trx_t::remove_flush_observer()
+{
+	UT_DELETE(flush_observer);
+	flush_observer = NULL;
 }
 
 /** Assign a rollback segment for modifying temporary tables.

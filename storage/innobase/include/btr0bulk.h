@@ -284,6 +284,7 @@ public:
 		m_trx(trx),
 		m_flush_observer(observer)
 	{
+		ut_ad(!dict_index_is_spatial(index));
 #ifdef UNIV_DEBUG
 		if (m_flush_observer)
 		fil_space_inc_redo_skipped_count(m_index->space);

@@ -40,20 +40,9 @@ Created 3/26/1996 Heikki Tuuri
 
 // Forward declaration
 struct mtr_t;
-
-// Forward declaration
 class ReadView;
-
-// Forward declaration
 class FlushObserver;
-
-/** Set flush observer for the transaction
-@param[in/out]	trx		transaction struct
-@param[in]	observer	flush observer */
-void
-trx_set_flush_observer(
-	trx_t*		trx,
-	FlushObserver*	observer);
+class ut_stage_alter_t;
 
 /******************************************************************//**
 Set detailed error message for the transaction. */
@@ -1132,8 +1121,11 @@ struct trx_t {
 	/*------------------------------*/
 	char*		detailed_error;	/*!< detailed error message for last
 					error, or empty. */
-	FlushObserver*	flush_observer;	/*!< flush observer */
-
+private:
+	/** flush observer used to track flushing of non-redo logged pages
+	during bulk create index */
+	FlushObserver*	flush_observer;
+public:
 	/* Lock wait statistics */
 	ulint		n_rec_lock_waits;
 					/*!< Number of record lock waits,
@@ -1175,6 +1167,22 @@ struct trx_t {
 		}
 
 		return(assign_temp_rseg());
+	}
+
+	/** Set the flush observer for the trx
+	@param[in]	space_id	tablespace id
+	@param[in]	stage		performance schema accounting
+					object used for alter table*/
+	void set_flush_observer(ulint space_id, ut_stage_alter_t* stage);
+
+	/** Remove the flush observer for the trx*/
+	void remove_flush_observer();
+
+	/** Get the flush observer for the transaction
+	@return flush observer for the trx */
+	FlushObserver* get_flush_observer() const
+	{
+		return flush_observer;
 	}
 
 private:
