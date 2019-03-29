@@ -431,16 +431,18 @@ static int and_range_trees(RANGE_OPT_PARAM *param,
 static bool remove_nonrange_trees(RANGE_OPT_PARAM *param, SEL_TREE *tree);
 
 static void print_key_value(String *out, const KEY_PART_INFO *key_part,
-                            const uchar *key);
+                            const uchar* key, uint length);
+static void print_keyparts_name(String *out, const KEY_PART_INFO *key_part,
+                         uint n_keypart, key_part_map keypart_map);
 
 static void append_range_all_keyparts(Json_writer_array *range_trace,
-                                      String *range_string,
-                                      String *range_so_far, const SEL_ARG *keypart,
+                                      PARAM param, uint idx,
+                                      SEL_ARG *keypart,
                                       const KEY_PART_INFO *key_parts);
 
 static
-void append_range(String *out, const KEY_PART_INFO *key_parts,
-                  const uchar *min_key, const uchar *max_key, const uint flag);
+void append_range(String *out, const KEY_PART_INFO *key_part,
+                          KEY_MULTI_RANGE *range, uint n_key_parts);
 
 
 /*
@@ -2208,7 +2210,7 @@ public:
      @param param        Parameters for range analysis of this table
      @param trace_object The optimizer trace object the info is appended to
   */
-  virtual void trace_basic_info(const PARAM *param,
+  virtual void trace_basic_info(PARAM *param,
                                 Json_writer_object *trace_object) const= 0;
 
 };
@@ -2251,11 +2253,11 @@ public:
     }
     DBUG_RETURN(quick);
   }
-  void trace_basic_info(const PARAM *param,
+  void trace_basic_info(PARAM *param,
                         Json_writer_object *trace_object) const;
 };
 
-void TRP_RANGE::trace_basic_info(const PARAM *param,
+void TRP_RANGE::trace_basic_info(PARAM *param,
                                  Json_writer_object *trace_object) const
 {
   DBUG_ASSERT(param->using_real_indexes);
@@ -2273,10 +2275,7 @@ void TRP_RANGE::trace_basic_info(const PARAM *param,
   // TRP_RANGE should not be created if there are no range intervals
   DBUG_ASSERT(key);
 
-  String range_info;
-  range_info.length(0);
-  range_info.set_charset(system_charset_info);
-  append_range_all_keyparts(&trace_range, NULL, &range_info, key, key_part);
+  append_range_all_keyparts(&trace_range, *param, key_idx, key, key_part);
 }
 
 
@@ -2296,7 +2295,7 @@ public:
   struct st_ror_scan_info *cpk_scan;  /* Clustered PK scan, if there is one */
   bool is_covering; /* TRUE if no row retrieval phase is necessary */
   double index_scan_costs; /* SUM(cost(index_scan)) */
-  void trace_basic_info(const PARAM *param,
+  void trace_basic_info(PARAM *param,
                         Json_writer_object *trace_object) const;
 };
 
@@ -2317,11 +2316,11 @@ public:
                              MEM_ROOT *parent_alloc);
   TABLE_READ_PLAN **first_ror; /* array of ptrs to plans for merged scans */
   TABLE_READ_PLAN **last_ror;  /* end of the above array */
-  void trace_basic_info(const PARAM *param,
+  void trace_basic_info(PARAM *param,
                         Json_writer_object *trace_object) const;
 };
 
-void TRP_ROR_UNION::trace_basic_info(const PARAM *param,
+void TRP_ROR_UNION::trace_basic_info(PARAM *param,
                                      Json_writer_object *trace_object) const
 {
   THD *thd= param->thd;
@@ -2351,12 +2350,12 @@ public:
   TRP_RANGE **range_scans_end; /* end of the array */
   /* keys whose scans are to be filtered by cpk conditions */
   key_map filtered_scans;
-  void trace_basic_info(const PARAM *param,
+  void trace_basic_info(PARAM *param,
                         Json_writer_object *trace_object) const;
 
 };
 
-void TRP_INDEX_INTERSECT::trace_basic_info(const PARAM *param,
+void TRP_INDEX_INTERSECT::trace_basic_info(PARAM *param,
                                        Json_writer_object *trace_object) const
 {
   THD *thd= param->thd;
@@ -2385,11 +2384,11 @@ public:
                              MEM_ROOT *parent_alloc);
   TRP_RANGE **range_scans; /* array of ptrs to plans of merged scans */
   TRP_RANGE **range_scans_end; /* end of the array */
-  void trace_basic_info(const PARAM *param,
+  void trace_basic_info(PARAM *param,
                         Json_writer_object *trace_object) const;
 };
 
-void TRP_INDEX_MERGE::trace_basic_info(const PARAM *param,
+void TRP_INDEX_MERGE::trace_basic_info(PARAM *param,
                                        Json_writer_object *trace_object) const
 {
   THD *thd= param->thd;
@@ -2452,12 +2451,12 @@ public:
   QUICK_SELECT_I *make_quick(PARAM *param, bool retrieve_full_rows,
                              MEM_ROOT *parent_alloc);
   void use_index_scan() { is_index_scan= TRUE; }
-  void trace_basic_info(const PARAM *param,
+  void trace_basic_info(PARAM *param,
                         Json_writer_object *trace_object) const;
 };
 
 
-void TRP_GROUP_MIN_MAX::trace_basic_info(const PARAM *param,
+void TRP_GROUP_MIN_MAX::trace_basic_info(PARAM *param,
                                 Json_writer_object *trace_object) const
 {
   THD *thd= param->thd;
@@ -2489,10 +2488,8 @@ void TRP_GROUP_MIN_MAX::trace_basic_info(const PARAM *param,
   // can have group quick without ranges
   if (index_tree)
   {
-    String range_info;
-    range_info.set_charset(system_charset_info);
-    append_range_all_keyparts(&trace_range, NULL, &range_info, index_tree,
-                              key_part);
+    append_range_all_keyparts(&trace_range, *param, param_idx,
+                                      index_tree, key_part);
   }
 }
 
@@ -6375,7 +6372,7 @@ typedef struct st_ror_scan_info : INDEX_SCAN_INFO
 { 
 } ROR_SCAN_INFO;
 
-void TRP_ROR_INTERSECT::trace_basic_info(const PARAM *param,
+void TRP_ROR_INTERSECT::trace_basic_info(PARAM *param,
                                          Json_writer_object *trace_object) const
 {
   THD *thd= param->thd;
@@ -6398,20 +6395,9 @@ void TRP_ROR_INTERSECT::trace_basic_info(const PARAM *param,
     trace_isect_idx.add("rows", (*cur_scan)->records);
 
     Json_writer_array trace_range(thd, "ranges");
-    for (const SEL_ARG *current= (*cur_scan)->sel_arg->first(); current;
-                                                 current= current->next)
-    {
-      String range_info;
-      range_info.set_charset(system_charset_info);
-      for (const SEL_ARG *part= current; part;
-           part= part->next_key_part ? part->next_key_part : nullptr)
-      {
-        const KEY_PART_INFO *cur_key_part= key_part + part->part;
-        append_range(&range_info, cur_key_part, part->min_value,
-                     part->max_value, part->min_flag | part->max_flag);
-      }
-      trace_range.add(range_info.ptr(), range_info.length());
-    }
+
+    append_range_all_keyparts(&trace_range, *param, (*cur_scan)->idx,
+                             (*cur_scan)->sel_arg->first(), key_part);
   }
 }
 
@@ -7389,9 +7375,6 @@ static TRP_RANGE *get_key_scans_params(PARAM *param, SEL_TREE *tree,
         const KEY &cur_key= param->table->key_info[keynr];
         const KEY_PART_INFO *key_part= cur_key.key_part;
 
-        String range_info;
-        range_info.set_charset(system_charset_info);
-
         index_scan->idx= idx;
         index_scan->keynr= keynr;
         index_scan->key_info= &param->table->key_info[keynr];
@@ -7402,8 +7385,8 @@ static TRP_RANGE *get_key_scans_params(PARAM *param, SEL_TREE *tree,
         *tree->index_scans_end++= index_scan;
 
         if (unlikely(thd->trace_started()))
-          append_range_all_keyparts(&trace_range, NULL, &range_info, key,
-                                    key_part);
+          append_range_all_keyparts(&trace_range, (*param), idx,
+                                              key, key_part);
         trace_range.end();
 
         trace_idx.add("rowid_ordered", param->is_ror_scan)
@@ -13554,11 +13537,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
         Json_writer_array trace_range(thd, "ranges");
 
         const KEY_PART_INFO *key_part= cur_index_info->key_part;
-
-        String range_info;
-        range_info.set_charset(system_charset_info);
-        append_range_all_keyparts(&trace_range, NULL, &range_info,
-                                  cur_index_tree, key_part);
+        append_range_all_keyparts(&trace_range, *param, cur_param_idx,
+                                          cur_index_tree, key_part);
       }
     }
     cost_group_min_max(table, cur_index_info, cur_used_key_parts,
@@ -15730,12 +15710,17 @@ void QUICK_GROUP_MIN_MAX_SELECT::dbug_dump(int indent, bool verbose)
 }
 
 #endif /* !DBUG_OFF */
+
 static
 void append_range(String *out, const KEY_PART_INFO *key_part,
-                  const uchar *min_key, const uchar *max_key, const uint flag)
+                          KEY_MULTI_RANGE *range, uint n_key_parts)
 {
-  if (out->length() > 0)
-    out->append(STRING_WITH_LEN(" AND "));
+  uint flag= range->range_flag;
+  String key_name;
+  key_name.set_charset(system_charset_info);
+  key_part_map keypart_map= range->start_key.length ?
+                            range->start_key.keypart_map :
+                            range->end_key.keypart_map;
 
   if (flag & GEOM_FLAG)
   {
@@ -15744,22 +15729,24 @@ void append_range(String *out, const KEY_PART_INFO *key_part,
       range types, so printing "col < some_geom" doesn't make sense.
       Just print the column name, not operator.
     */
-    out->append(key_part->field->field_name);
+    print_keyparts_name(out, key_part, n_key_parts, keypart_map);
     out->append(STRING_WITH_LEN(" "));
-    print_key_value(out, key_part, min_key);
+    print_key_value(out, key_part, range->start_key.key,
+                    range->start_key.length);
     return;
   }
 
   if (!(flag & NO_MIN_RANGE))
   {
-    print_key_value(out, key_part, min_key);
+    print_key_value(out, key_part, range->start_key.key,
+                    range->start_key.length);
     if (flag & NEAR_MIN)
       out->append(STRING_WITH_LEN(" < "));
     else
       out->append(STRING_WITH_LEN(" <= "));
   }
 
-  out->append(key_part->field->field_name);
+  print_keyparts_name(out, key_part, n_key_parts, keypart_map);
 
   if (!(flag & NO_MAX_RANGE))
   {
@@ -15767,9 +15754,11 @@ void append_range(String *out, const KEY_PART_INFO *key_part,
       out->append(STRING_WITH_LEN(" < "));
     else
       out->append(STRING_WITH_LEN(" <= "));
-    print_key_value(out, key_part, max_key);
+    print_key_value(out, key_part, range->end_key.key,
+                    range->end_key.length);
   }
 }
+
 
 /*
 
@@ -15782,53 +15771,31 @@ void append_range(String *out, const KEY_PART_INFO *key_part,
 */
 
 static void append_range_all_keyparts(Json_writer_array *range_trace,
-                                      String *range_string,
-                                      String *range_so_far, const SEL_ARG *keypart,
+                                      PARAM param, uint idx,
+                                      SEL_ARG *keypart,
                                       const KEY_PART_INFO *key_parts)
 {
-
-  DBUG_ASSERT(keypart);
-  DBUG_ASSERT(keypart && keypart != &null_element);
-
-  // Navigate to first interval in red-black tree
+  SEL_ARG_RANGE_SEQ seq;
+  KEY_MULTI_RANGE range;
+  range_seq_t seq_it;
+  uint flags= 0;
+  RANGE_SEQ_IF seq_if = {NULL, sel_arg_range_seq_init, 
+                         sel_arg_range_seq_next, 0, 0};
+  KEY *keyinfo= param.table->key_info + param.real_keynr[idx];
+  uint n_key_parts= param.table->actual_n_key_parts(keyinfo);
+  seq.keyno= idx;
+  seq.real_keyno= param.real_keynr[idx];
+  seq.param= &param;
+  seq.start= keypart;
   const KEY_PART_INFO *cur_key_part= key_parts + keypart->part;
-  const SEL_ARG *keypart_range= keypart->first();
-  const size_t save_range_so_far_length= range_so_far->length();
+  seq_it= seq_if.init((void *) &seq, 0, flags);
 
-
-  while (keypart_range)
+  while (!seq_if.next(seq_it, &range))
   {
-    // Append the current range predicate to the range String
-    switch (keypart->type)
-    {
-      case SEL_ARG::Type::KEY_RANGE:
-        append_range(range_so_far, cur_key_part, keypart_range->min_value,
-                     keypart_range->max_value,
-                     keypart_range->min_flag | keypart_range->max_flag);
-        break;
-      case SEL_ARG::Type::MAYBE_KEY:
-        range_so_far->append("MAYBE_KEY");
-        break;
-      case SEL_ARG::Type::IMPOSSIBLE:
-        range_so_far->append("IMPOSSIBLE");
-        break;
-      default:
-        DBUG_ASSERT(false);
-        break;
-    }
-
-    if (keypart_range->next_key_part &&
-        keypart_range->next_key_part->part ==
-              keypart_range->part + 1 &&
-        keypart_range->is_singlepoint())
-    {
-      append_range_all_keyparts(range_trace, range_string, range_so_far,
-                                keypart_range->next_key_part, key_parts);
-    }
-    else
-      range_trace->add(range_so_far->c_ptr_safe(), range_so_far->length());
-    keypart_range= keypart_range->next;
-    range_so_far->length(save_range_so_far_length);
+    String range_info;
+    range_info.set_charset(system_charset_info);
+    append_range(&range_info, cur_key_part, &range, n_key_parts);
+    range_trace->add(range_info.c_ptr_safe(), range_info.length());
   }
 }
 
@@ -15839,69 +15806,100 @@ static void append_range_all_keyparts(Json_writer_array *range_trace,
   @param[in]  key_part     Index components description
   @param[in]  key          Key tuple
 */
+
 static void print_key_value(String *out, const KEY_PART_INFO *key_part,
-                            const uchar *key)
+                            const uchar* key, uint used_length)
 {
+  out->append(STRING_WITH_LEN("("));
   Field *field= key_part->field;
-
-  if (field->flags & BLOB_FLAG)
-  {
-    // Byte 0 of a nullable key is the null-byte. If set, key is NULL.
-    if (field->real_maybe_null() && *key)
-      out->append(STRING_WITH_LEN("NULL"));
-    else
-      (field->type() == MYSQL_TYPE_GEOMETRY)
-          ? out->append(STRING_WITH_LEN("unprintable_geometry_value"))
-          : out->append(STRING_WITH_LEN("unprintable_blob_value"));
-    return;
-  }
-
-  uint store_length= key_part->store_length;
-
-  if (field->real_maybe_null())
-  {
-    /*
-      Byte 0 of key is the null-byte. If set, key is NULL.
-      Otherwise, print the key value starting immediately after the
-      null-byte
-    */
-    if (*key)
-    {
-      out->append(STRING_WITH_LEN("NULL"));
-      return;
-    }
-    key++;  // Skip null byte
-    store_length--;
-  }
-
-  /*
-    Binary data cannot be converted to UTF8 which is what the
-    optimizer trace expects. If the column is binary, the hex
-    representation is printed to the trace instead.
-  */
-  if (field->flags & BINARY_FLAG)
-  {
-    out->append("0x");
-    for (uint i = 0; i < store_length; i++)
-    {
-      out->append(_dig_vec_lower[*(key + i) >> 4]);
-      out->append(_dig_vec_lower[*(key + i) & 0x0F]);
-    }
-    return;
-  }
-
   StringBuffer<128> tmp(system_charset_info);
   TABLE *table= field->table;
+  uint store_length;
   my_bitmap_map *old_sets[2];
-
   dbug_tmp_use_all_columns(table, old_sets, table->read_set, table->write_set);
+  const uchar *key_end= key+used_length;
 
-  field->set_key_image(key, key_part->length);
-  if (field->type() == MYSQL_TYPE_BIT)
-    (void)field->val_int_as_str(&tmp, 1);  // may change tmp's charset
-  else
-    field->val_str(&tmp);  // may change tmp's charset
-  out->append(tmp.ptr(), tmp.length(), tmp.charset());
+  for (; key < key_end; key+=store_length, key_part++)
+  {
+    field= key_part->field;
+    store_length= key_part->store_length;
+    if (field->flags & BLOB_FLAG)
+    {
+      // Byte 0 of a nullable key is the null-byte. If set, key is NULL.
+      if (field->real_maybe_null() && *key)
+        out->append(STRING_WITH_LEN("NULL"));
+      else
+        (field->type() == MYSQL_TYPE_GEOMETRY)
+            ? out->append(STRING_WITH_LEN("unprintable_geometry_value"))
+            : out->append(STRING_WITH_LEN("unprintable_blob_value"));
+      goto next;
+    }
 
+    if (field->real_maybe_null())
+    {
+      /*
+        Byte 0 of key is the null-byte. If set, key is NULL.
+        Otherwise, print the key value starting immediately after the
+        null-byte
+      */
+      if (*key)
+      {
+        out->append(STRING_WITH_LEN("NULL"));
+        goto next;
+      }
+      key++;  // Skip null byte
+      store_length--;
+    }
+
+    /*
+      Binary data cannot be converted to UTF8 which is what the
+      optimizer trace expects. If the column is binary, the hex
+      representation is printed to the trace instead.
+    */
+    if (field->flags & BINARY_FLAG)
+    {
+      out->append("0x");
+      for (uint i = 0; i < store_length; i++)
+      {
+        out->append(_dig_vec_lower[*(key + i) >> 4]);
+        out->append(_dig_vec_lower[*(key + i) & 0x0F]);
+      }
+      goto next;
+    }
+
+    field->set_key_image(key, key_part->length);
+    if (field->type() == MYSQL_TYPE_BIT)
+      (void)field->val_int_as_str(&tmp, 1);  // may change tmp's charset
+    else
+      field->val_str(&tmp);  // may change tmp's charset
+    out->append(tmp.ptr(), tmp.length(), tmp.charset());
+
+  next:
+    if (key + store_length < key_end)
+      out->append(STRING_WITH_LEN(","));
+  }
   dbug_tmp_restore_column_maps(table->read_set, table->write_set, old_sets);
+  out->append(STRING_WITH_LEN(")"));
+}
+
+void print_keyparts_name(String *out, const KEY_PART_INFO *key_part,
+                         uint n_keypart, key_part_map keypart_map)
+{
+  uint i;
+  out->append(STRING_WITH_LEN("("));
+  bool first_keypart= TRUE;
+  for (i=0; i < n_keypart; key_part++, i++)
+  {
+    if (keypart_map & (1 << i))
+    {
+      if (first_keypart)
+        first_keypart= FALSE;
+      else
+        out->append(STRING_WITH_LEN(","));
+      out->append(key_part->field->field_name);
+    }
+    else
+      break;
+  }
+  out->append(STRING_WITH_LEN(")"));
 }
