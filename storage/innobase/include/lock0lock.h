@@ -821,13 +821,22 @@ lock_unlock_table_autoinc(
 /*********************************************************************//**
 Check whether the transaction has already been rolled back because it
 was selected as a deadlock victim, or if it has to wait then cancel
-the wait lock.
+the wait lock. This function should be called only when holding
+lock sys mutex and trx mutex.
+
+@param trx  transaction object
+@return DB_DEADLOCK, DB_LOCK_WAIT or DB_SUCCESS */
+dberr_t lock_trx_handle_wait(trx_t* trx)
+	MY_ATTRIBUTE((nonnull));
+
+/*********************************************************************//**
+Handle lock waits for MySQL interface.
+See detailed description on lock0lock.cc
+
+@param trx   transaction object
 @return DB_DEADLOCK, DB_LOCK_WAIT or DB_SUCCESS */
 UNIV_INTERN
-dberr_t
-lock_trx_handle_wait(
-/*=================*/
-	trx_t*	trx)	/*!< in/out: trx lock state */
+dberr_t lock_trx_handle_wait_for_mysql(trx_t* trx)
 	MY_ATTRIBUTE((nonnull));
 /*********************************************************************//**
 Get the number of locks on a table.

@@ -4744,7 +4744,29 @@ no_gap_lock:
 
 			/* Check whether it was a deadlock or not, if not
 			a deadlock and the transaction had to wait then
-			release the lock it is waiting on. */
+			release the lock it is waiting on.
+
+			There is two possible cases here:
+
+			(1) wsrep high priority thread or replication
+			thread selects this thread as a victim. Both
+			will take lock sys mutex and trx mutex before
+			entering thread abort. Thus, either this
+			thread will check deadlock below or this
+			thread will be aborted and then we find it
+			out below. Thus concurrent access in
+			this case is protected by lock sys and trx
+			mutex.
+
+			(2) User action kill. Here killing thread either
+			takes lock sys mutex and trx mutex before
+			aborting this thread and we will find it out
+			when they are released or this thread
+			acquires them fist and we check deadlock
+			and then killing thread can proceed. Thus
+			concurrent access in this case is also
+			protected by lock sys and trx mutex.
+			*/
 
 			lock_mutex_enter();
 			trx_mutex_enter(trx);

@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 2006, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, MariaDB Corporation.
+Copyright (c) 2017, 2019, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -688,4 +688,15 @@ normalize_table_name_low(
 	const char*	name,		/*!< in: table name string */
 	ibool		set_lower_case); /*!< in: TRUE if we want to set
 					name to lower case */
+
+/* Check if thread abort initiator is InnoDB.
+@param thd   MYSQL thread
+@return true if abort initiator is InnoDB */
+bool innodb_is_abort_initiator(THD* thd);
+
+/* Helper to report replication waits.
+@param thd  MYSQL thread
+@param thd  MYSQL victim thread */
+void innodb_report_wait_for(THD * thd, THD* other_thd);
+
 #endif /* HA_INNODB_PROTOTYPES_H */

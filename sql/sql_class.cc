@@ -623,6 +623,35 @@ void thd_set_ha_data(THD *thd, const struct handlerton *hton,
 
 
 /**
+  Provides setter for thread abort initiator.  Caller should
+  already own LOCK_thd_data mutex.
+
+  @param thd                     THD object
+  @param hton                    handlerton or NULL
+*/
+extern "C"
+void thd_set_abort_initiator(THD *thd, const struct handlerton *hton)
+{
+  mysql_mutex_assert_owner(&thd->LOCK_thd_data);
+  thd->abort_initiator= hton;
+}
+
+
+/**
+  Provides getter for thread abort initiator. Caller should
+  already own LOCK_thd_data mutex.
+
+  @param thd                        THD object
+  @retun handlerton object or NULL
+*/
+extern "C"
+const struct handlerton* thd_get_abort_initiator(THD* thd)
+{
+  mysql_mutex_assert_owner(&thd->LOCK_thd_data);
+  return thd->abort_initiator;
+}
+
+/**
   Allow storage engine to wakeup commits waiting in THD::wait_for_prior_commit.
   @see thd_wakeup_subsequent_commits() definition in plugin.h
 */
@@ -4526,7 +4555,7 @@ thd_need_wait_for(const MYSQL_THD thd)
   not harmful, but could lead to unnecessary kill and retry, so best avoided).
 */
 extern "C" void
-thd_report_wait_for(MYSQL_THD thd, MYSQL_THD other_thd)
+thd_report_wait_for(MYSQL_THD thd, MYSQL_THD other_thd, const handlerton* abort_initiator=NULL)
 {
   rpl_group_info *rgi;
   rpl_group_info *other_rgi;
@@ -4562,6 +4591,7 @@ thd_report_wait_for(MYSQL_THD thd, MYSQL_THD other_thd)
   */
   other_rgi->killed_for_retry= rpl_group_info::RETRY_KILL_KILLED;
   mysql_mutex_lock(&other_thd->LOCK_thd_data);
+  other_thd->abort_initiator= abort_initiator;
   other_thd->awake(KILL_CONNECTION);
   mysql_mutex_unlock(&other_thd->LOCK_thd_data);
 }

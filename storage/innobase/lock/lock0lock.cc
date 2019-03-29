@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2014, 2018, MariaDB Corporation.
+Copyright (c) 2014, 2019, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -402,7 +402,6 @@ lock_grant(
 	lock_t*	lock,	/*!< in/out: waiting lock request */
     bool    owns_trx_mutex);    /*!< in: whether lock->trx->mutex is owned */
 
-extern "C" void thd_report_wait_for(MYSQL_THD thd, MYSQL_THD other_thd);
 extern "C" int thd_need_wait_for(const MYSQL_THD thd);
 extern "C"
 int thd_need_ordering_with(const MYSQL_THD thd, const MYSQL_THD other_thd);
@@ -1793,10 +1792,8 @@ wsrep_kill_victim(
 				}
 			}
 
-			lock->trx->abort_type = TRX_WSREP_ABORT;
 			wsrep_innobase_kill_one_trx(trx->mysql_thd,
 				(const trx_t*) trx, lock->trx, TRUE);
-			lock->trx->abort_type = TRX_SERVER_ABORT;
 		}
 	}
 }
@@ -4782,12 +4779,10 @@ lock_report_waiters_to_mysql(
 			if (w_trx->id != victim_trx_id) {
 				/* If thd_report_wait_for() decides to kill the
 				transaction, then we will get a call back into
-				innobase_kill_query. We mark this by setting
-				current_lock_mutex_owner, so we can avoid trying
-				to recursively take lock_sys->mutex. */
-				w_trx->abort_type = TRX_REPLICATION_ABORT;
-				thd_report_wait_for(mysql_thd, w_trx->mysql_thd);
-				w_trx->abort_type = TRX_SERVER_ABORT;
+				innobase_kill_query.*/
+				trx_mutex_enter(w_trx);
+				innodb_report_wait_for(mysql_thd, w_trx->mysql_thd);
+				trx_mutex_exit(w_trx);
 			}
 			++i;
 		}
@@ -7970,13 +7965,12 @@ lock_trx_release_locks(
 /*********************************************************************//**
 Check whether the transaction has already been rolled back because it
 was selected as a deadlock victim, or if it has to wait then cancel
-the wait lock.
+the wait lock. This function should be called only when holding
+lock sys mutex and trx mutex.
+
+@param trx  transaction object
 @return DB_DEADLOCK, DB_LOCK_WAIT or DB_SUCCESS */
-UNIV_INTERN
-dberr_t
-lock_trx_handle_wait(
-/*=================*/
-	trx_t*	trx)	/*!< in/out: trx lock state */
+dberr_t lock_trx_handle_wait(trx_t* trx)
 {
 	ut_ad(lock_mutex_own());
 	ut_ad(trx_mutex_own(trx));
@@ -7991,6 +7985,60 @@ lock_trx_handle_wait(
 
 	lock_cancel_waiting_and_release(trx->lock.wait_lock);
 	return DB_LOCK_WAIT;
+}
+
+/*********************************************************************//**
+Handle lock waits for MySQL interface.
+
+This function should called only from handler API i.e. ha_innodb.cc.
+Call trace: THD::awake() (we hold LOCK_thd_data) -> ha_kill_query()
+-> hton->kill_query() -> innobase_kill_query() ->
+
+There is 3 possible cases:
+
+(1) wsrep high priority thread aborting lock holder i.e. victim thread
+wsrep_abort_transaction() (takes lock sys mutex and trx mutex for
+victim) -> marks abort initiator as InnoDB  -> wsrep_thd_awake()
+-> thd->awake(KILL_QUERY) (while holding LOCK_thd_data).
+thd->abort_initiator is protected by LOCK_thd_data and we are
+holding it so it can't change during this function.
+Thus, we hold lock sys, trx and LOCK_thd_data mutexes.
+
+(2) replication thread aborting lock holder
+lock_report_waiters_to_mysql() (we hold lock sys mutes and take trx
+mutex to victim) -> innodb_report_wait_for() -> thd_report_wait_for()
+we mark abort initiator as provided hton-> thd->awake(KILL_CONNECTION)
+(while holding LOCK_thd_data).
+thd->abort_initiator is protected by LOCK_thd_data and we are
+holding it so it can't change during this function.
+Thus, we hold lock sys, trx and LOCK_thd_data mutexes.
+
+(3) User action KILL [HARD | SOFT] [CONNECTION | QUERY [ID] ]
+[thread_id | USER user_name | query_id]
+thd->awake() (while holding LOCK_thd_data) no other mutexes.
+Thus, thd->abort_initiator is protected by LOCK_thd_data and
+we are holding it so it can't change during this function.
+We need to take lock sys mutex and trx mutex.
+
+@return DB_DEADLOCK, DB_LOCK_WAIT or DB_SUCCESS */
+UNIV_INTERN
+dberr_t lock_trx_handle_wait_for_mysql(trx_t* trx)
+{
+	dberr_t err= DB_SUCCESS;
+
+	if (trx->mysql_thd && innodb_is_abort_initiator(trx->mysql_thd)) {
+		err = lock_trx_handle_wait(trx);
+	} else {
+		ut_ad(!lock_mutex_own());
+		ut_ad(!trx_mutex_own(trx));
+		lock_mutex_enter();
+		trx_mutex_enter(trx);
+		err = lock_trx_handle_wait(trx);
+		lock_mutex_exit();
+		trx_mutex_exit(trx);
+	}
+
+	return err;
 }
 
 /*********************************************************************//**

@@ -4141,6 +4141,11 @@ public:
 
   /* Handling of timeouts for commands */
   thr_timer_t query_timer;
+
+  /* Thread abort initiator. Used on thd::awake() to identify the
+  storage engine initing the thread abort or NULL. */
+  const struct handlerton* abort_initiator;
+
 public:
   void set_query_timer()
   {
