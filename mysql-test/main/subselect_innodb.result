@@ -616,3 +616,23 @@ id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 Warnings:
 Note	1003	select `test`.`t1`.`f1` AS `f1`,`test`.`t2`.`f2` AS `f2`,`test`.`t3`.`f3` AS `f3` from `test`.`t1` join `test`.`t2` semi join (`test`.`t4`) join `test`.`t3` where `test`.`t4`.`f4` = 1 and `test`.`t1`.`f1` >= `test`.`t2`.`f2`
 DROP TABLE t1,t2,t3,t4;
+# 
+# MDEV-17362: SIGSEGV in JOIN::optimize_inner or Assertion `fixed == 0'
+# failed in  Item_equal::fix_fields, server crashes after 2nd execution
+# of PS
+# 
+CREATE TABLE t1 (pk int primary key, i1 int, i2 int, v1 varchar(1), v2 varchar(1), KEY i1 (i1), KEY v2 (v2,i1)) ENGINE=InnoDB ;
+INSERT INTO t1 VALUES (12,1,1,'r','r');
+CREATE TABLE t2 (pk int, i1 int, i2 int, v1 varchar(1), v2 varchar(1)) ENGINE=InnoDB ;
+CREATE TABLE t3 (pk int, i1 int, i2 int, v1 varchar(1), v2 varchar(1)) ENGINE=InnoDB ;
+INSERT INTO t3 VALUES (19,1,9,NULL,NULL),(20,5,6,'r','r');
+prepare stmt from "
+SELECT 1 FROM t1
+WHERE t1.pk = t1.i1 
+	AND ((t1.pk,t1.i1) IN (SELECT t3.pk, COUNT(t3.pk) FROM t3
+          WHERE EXISTS (SELECT 1 FROM (t1 JOIN t3 ON (t3.i2 = t1.i1)) WHERE t3.v1 = t1.v1)));";
+execute stmt;
+1
+execute stmt;
+1
+drop table t1,t2,t3;

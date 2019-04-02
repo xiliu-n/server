@@ -611,3 +611,27 @@ FROM t1
 
 DROP TABLE t1,t2,t3,t4;
 
+--echo # 
+--echo # MDEV-17362: SIGSEGV in JOIN::optimize_inner or Assertion `fixed == 0'
+--echo # failed in  Item_equal::fix_fields, server crashes after 2nd execution
+--echo # of PS
+--echo # 
+
+CREATE TABLE t1 (pk int primary key, i1 int, i2 int, v1 varchar(1), v2 varchar(1), KEY i1 (i1), KEY v2 (v2,i1)) ENGINE=InnoDB ;
+INSERT INTO t1 VALUES (12,1,1,'r','r');
+ 
+CREATE TABLE t2 (pk int, i1 int, i2 int, v1 varchar(1), v2 varchar(1)) ENGINE=InnoDB ;
+ 
+CREATE TABLE t3 (pk int, i1 int, i2 int, v1 varchar(1), v2 varchar(1)) ENGINE=InnoDB ;
+INSERT INTO t3 VALUES (19,1,9,NULL,NULL),(20,5,6,'r','r');
+ 
+prepare stmt from "
+SELECT 1 FROM t1
+WHERE t1.pk = t1.i1 
+	AND ((t1.pk,t1.i1) IN (SELECT t3.pk, COUNT(t3.pk) FROM t3
+          WHERE EXISTS (SELECT 1 FROM (t1 JOIN t3 ON (t3.i2 = t1.i1)) WHERE t3.v1 = t1.v1)));";
+ 
+execute stmt;
+execute stmt;
+
+drop table t1,t2,t3;
