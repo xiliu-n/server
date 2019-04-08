@@ -7828,8 +7828,11 @@ SHOW_VAR status_vars[]= {
   {"Tc_log_page_waits",        (char*) &tc_log_page_waits,      SHOW_LONG},
 #endif
 #ifdef HAVE_POOL_OF_THREADS
-  {"Threadpool_idle_threads",  (char *) &show_threadpool_idle_threads, SHOW_SIMPLE_FUNC},
-  {"Threadpool_threads",       (char *) &tp_stats.num_worker_threads, SHOW_INT},
+  {"Threadpool_idle_threads",  (char *)&show_threadpool_idle_threads, SHOW_SIMPLE_FUNC},
+  {"Threadpool_threads",       (char *)&tp_stats.num_worker_threads, SHOW_INT},
+  {"Threadpool_stalls",        (char *)&tp_stats.num_stalls, SHOW_LONGLONG},
+  {"Threadpool_throttles",     (char *)&tp_stats.num_throttles, SHOW_LONGLONG},
+  {"Threadpool_lost_wakeups",  (char *)&tp_stats.num_lost_wakeups, SHOW_LONGLONG},
 #endif
   {"Threads_cached",           (char*) &cached_thread_count,    SHOW_LONG_NOFLUSH},
   {"Threads_connected",        (char*) &connection_count,       SHOW_INT},
@@ -9325,6 +9328,7 @@ void refresh_status(THD *thd)
 
   /* Reset the counters of all key caches (default and named). */
   process_key_caches(reset_key_cache_counters, 0);
+  reset_tp_stats();
   flush_status_time= time((time_t*) 0);
   mysql_mutex_unlock(&LOCK_status);
 

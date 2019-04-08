@@ -34,8 +34,7 @@ extern uint threadpool_mode; /* Thread pool implementation , windows or generic 
 struct TP_connection;
 extern void tp_callback(TP_connection *c);
 extern void tp_timeout_handler(TP_connection *c);
-
-
+extern void reset_tp_stats();
 
 /*
   Threadpool statistics
@@ -44,6 +43,9 @@ struct TP_STATISTICS
 {
   /* Current number of worker thread. */
   volatile int32 num_worker_threads;
+  longlong num_stalls;
+  longlong num_throttles;
+  longlong num_lost_wakeups;
 };
 
 extern TP_STATISTICS tp_stats;

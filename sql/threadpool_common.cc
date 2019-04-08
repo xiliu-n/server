@@ -506,6 +506,15 @@ static void tp_post_kill_notification(THD *thd)
   post_kill_notification(thd);
 }
 
+
+void reset_tp_stats()
+{
+  tp_stats.num_stalls= 0;
+  tp_stats.num_throttles= 0;
+  tp_stats.num_lost_wakeups= 0;
+}
+
+
 static scheduler_functions tp_scheduler_functions=
 {
   0,                                  // max_threads

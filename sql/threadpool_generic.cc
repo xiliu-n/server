@@ -735,6 +735,7 @@ void check_stall(thread_group_t *thread_group)
   if (!is_queue_empty(thread_group) && !thread_group->queue_event_count)
   {
     thread_group->stalled= true;
+    tp_stats.num_stalls++;
     wake_or_create_thread(thread_group);
   }
   
@@ -1028,6 +1029,10 @@ static int wake_or_create_thread(thread_group_t *thread_group)
   {
     DBUG_RETURN(create_worker(thread_group));
   }
+  else
+  {
+    tp_stats.num_throttles++;
+  }
   
   DBUG_RETURN(-1);
 }
@@ -1260,6 +1265,10 @@ TP_connection_generic *get_event(worker_thread_t *current_thread,
         connection= queue_get(thread_group);
         break;
       }
+    }
+    else
+    {
+      tp_stats.num_lost_wakeups++;
     }
 
 
