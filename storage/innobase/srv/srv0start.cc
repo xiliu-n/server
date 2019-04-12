@@ -1770,6 +1770,16 @@ files_checked:
 
 	err = srv_undo_tablespaces_init(create_new_db);
 
+	/* Work around the bug that we were performing a dirty read of
+	at least the TRX_SYS page into the buffer pool above, without
+	reading or applying any redo logs.
+
+	MDEV-19229 FIXME: Remove the dirty reads and this call.
+	Add an assertion that the buffer pool is empty, or that nothing
+	will be added to it before recv_recovery_from_checkpoint_start()
+	has been invoked. */
+	buf_pool_invalidate();
+
 	/* If the force recovery is set very high then we carry on regardless
 	of all errors. Basically this is fingers crossed mode. */
 
